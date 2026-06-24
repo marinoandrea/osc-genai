@@ -1,25 +1,24 @@
 """Encoding between musical Events and the integer field indices the model predicts.
 
-``repr.py`` keeps a faithful musical :class:`~osc_genai.repr.Event` (pitch, dt, dur in grid steps,
-velocity 0-127). The model instead works in a fixed vocabulary per field: pitch as one-of-128 plus
-an EOS class, ``dt``/``dur`` clamped to a maximum step count, and velocity binned. This module is
-the *only* place that lossy clamping/binning lives, so the rest of the stack stays in musical units.
-
-A note is four independent categorical fields ``(pitch, dt, dur, velocity)`` — the model has one head
-per field. End-of-sequence is an extra pitch class (``eos_pitch``); its other fields are ignored.
-``part`` (multi-voice) is not encoded yet — single-part material for v1.
+The model works in a fixed vocabulary per field: pitch as one-of-128 plus an EOS class, ``dt``/
+``dur`` clamped to a maximum step count, velocity binned, **channel** (0-15), and **source** (the
+duet role — PARTNER/SELF). One head per field; end-of-sequence is an extra pitch class
+(``eos_pitch``), its other fields ignored. The channel field lets generation address multiple
+instruments at once; the source field lets one interleaved stream carry both lines of a duet. This
+module is the only place lossy clamping/binning lives, so the rest of the stack stays in musical
+units.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .repr import Event
+from osc_genai.core.event import Event
 
 MIDI_RANGE = 128  # MIDI pitch and velocity are both 0-127
 
-# A note as model field indices: (pitch_idx, dt_idx, dur_idx, velocity_idx).
-Fields = tuple[int, int, int, int]
+# A note as model field indices: (pitch, dt, dur, velocity, channel, source).
+Fields = tuple[int, int, int, int, int, int]
 
 
 @dataclass(frozen=True)
@@ -27,6 +26,10 @@ class VocabConfig:
     max_dt: int = 32  # clamp onset gap to this many grid steps
     max_dur: int = 32  # clamp note length to this many grid steps
     velocity_bins: int = 16
+    num_channels: int = 16  # MIDI channels 0-15
+    num_sources: int = 2  # duet roles: PARTNER, SELF
+    use_phase: bool = False  # feed bar-relative grid position as an input-only conditioning feature
+    steps_per_bar: int = 16  # grid steps per bar (4 beats * 4 steps), the period of the phase feature
 
     @property
     def eos_pitch(self) -> int:
@@ -49,8 +52,23 @@ class VocabConfig:
         return self.velocity_bins
 
     @property
-    def field_sizes(self) -> tuple[int, int, int, int]:
-        return (self.pitch_vocab, self.dt_vocab, self.dur_vocab, self.velocity_vocab)
+    def channel_vocab(self) -> int:
+        return self.num_channels
+
+    @property
+    def source_vocab(self) -> int:
+        return self.num_sources
+
+    @property
+    def field_sizes(self) -> tuple[int, int, int, int, int, int]:
+        return (
+            self.pitch_vocab,
+            self.dt_vocab,
+            self.dur_vocab,
+            self.velocity_vocab,
+            self.channel_vocab,
+            self.source_vocab,
+        )
 
 
 class EventCodec:
@@ -65,15 +83,19 @@ class EventCodec:
         pitch = _clamp(event.pitch, 0, MIDI_RANGE - 1)
         dt = _clamp(event.dt, 0, cfg.max_dt)
         dur = _clamp(event.dur, 1, cfg.max_dur)
-        return (pitch, dt, dur - 1, self._encode_velocity(event.velocity))
+        channel = _clamp(event.channel, 0, cfg.num_channels - 1)
+        source = _clamp(event.source, 0, cfg.num_sources - 1)
+        return (pitch, dt, dur - 1, self._encode_velocity(event.velocity), channel, source)
 
     def decode(self, fields: Fields) -> Event:
-        pitch, dt, dur_idx, vel_idx = fields
+        pitch, dt, dur_idx, vel_idx, channel, source = fields
         return Event(
             pitch=pitch,
             dt=dt,
             dur=dur_idx + 1,
             velocity=self._decode_velocity(vel_idx),
+            channel=channel,
+            source=source,
         )
 
     # -- velocity binning -----------------------------------------------------------------------
@@ -89,7 +111,7 @@ class EventCodec:
     # -- end of sequence ------------------------------------------------------------------------
     @property
     def eos(self) -> Fields:
-        return (self.config.eos_pitch, 0, 0, 0)
+        return (self.config.eos_pitch, 0, 0, 0, 0, 0)
 
     def is_eos(self, fields: Fields) -> bool:
         return fields[0] == self.config.eos_pitch

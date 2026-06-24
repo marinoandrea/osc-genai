@@ -11,9 +11,12 @@ from typing import NamedTuple
 
 
 class Note(NamedTuple):
-    """A single MIDI note, in the shape AbletonOSC expects.
+    """A single MIDI note.
 
-    ``start`` and ``duration`` are in beats; ``pitch`` and ``velocity`` are 0-127.
+    ``start`` and ``duration`` are in beats; ``pitch`` and ``velocity`` are 0-127. ``channel`` (0-15)
+    lets the live MIDI path drive multiple instruments at once; the OSC clip path ignores it (a clip
+    is one track). It is last so positional ``Note(pitch, start, dur, vel[, mute])`` and 5-field
+    saved data stay valid.
     """
 
     pitch: int
@@ -21,6 +24,7 @@ class Note(NamedTuple):
     duration: float
     velocity: int = 100
     mute: bool = False
+    channel: int = 0
 
 
 # C major scale, one note per beat. MIDI 60 == middle C.

@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from osc_genai.generate import Note
-from osc_genai.repr import events_to_notes, notes_to_events
+from osc_genai.core.note import Note
+from osc_genai.core.event import events_to_notes, notes_to_events
 
 
 def test_roundtrip_on_grid_melody_is_exact():
@@ -21,6 +21,14 @@ def test_simultaneous_notes_get_zero_dt_and_sort_by_pitch():
     events = notes_to_events([Note(64, 0.0, 1.0, 100), Note(60, 0.0, 1.0, 100)])
     assert [e.pitch for e in events] == [60, 64]
     assert [e.dt for e in events] == [0, 0]
+
+
+def test_deep_polyphony_roundtrips_no_cap():
+    chord = [Note(40 + i, 0.0, 0.5, 100) for i in range(16)]  # a 16-note cluster
+    events = notes_to_events(chord)
+    assert sum(1 for e in events if e.dt == 0) == 16  # all simultaneous, no cap
+    rt = events_to_notes(events)
+    assert len(rt) == 16 and {n.start for n in rt} == {0.0}  # still one 16-note chord
 
 
 def test_muted_notes_are_dropped():
