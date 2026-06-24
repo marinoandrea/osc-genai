@@ -23,6 +23,7 @@ from __future__ import annotations
 import argparse
 import heapq
 import os
+import sys
 import threading
 import time
 from collections.abc import Callable
@@ -36,6 +37,8 @@ from osc_genai.realtime.clock import make_clock  # noqa: E402
 from osc_genai.data.pairs import interleave  # noqa: E402
 from osc_genai.core.event import DEFAULT_STEPS_PER_BEAT  # noqa: E402
 from osc_genai.realtime.scheduler import AnticipatoryBuffer, Scheduled  # noqa: E402
+from osc_genai.data.snapshot import save_snapshot  # noqa: E402
+from osc_genai.osc.listen import OSCTrigger  # noqa: E402
 from osc_genai.model.checkpoint import load_model  # noqa: E402
 from osc_genai.core.vocab import EventCodec  # noqa: E402
 
@@ -98,6 +101,15 @@ def duet(
     regular_temperature: float = 0.15,
     snap_steps: int = 2,
     seconds: float | None = None,
+    beats_per_bar: float = 4.0,
+    snapshot_root: str | None = None,
+    snapshot_bars: int = 4,
+    snapshot_human_inst: str = "Bass",
+    snapshot_machine_inst: str = "Drums",
+    snapshot_artist: str = "personal",
+    snapshot_key: str = "s",
+    snapshot_osc_port: int | None = None,
+    snapshot_osc_addr: str = "/snapshot",
 ) -> None:
     """Play an anticipatory duet: fold the human's timed notes into the model's interleaved stream and
     generate the complementary ``SELF`` line ahead, reconciling when the human moves.
@@ -249,6 +261,47 @@ def duet(
     def expired() -> bool:
         return seconds is not None and (time.perf_counter() - start) >= seconds
 
+    # Snapshot: on a keypress or an OSC bang, grab the last N bars of both parts and save them as
+    # a training pair (see osc_genai.data.snapshot). Triggers run on their own threads so they
+    # never touch the firing loop's timing; state is copied under the existing locks (cheap, no
+    # model compute). snapshot_lock serialises concurrent keyboard/OSC triggers.
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    snapshot_count = [0]
+    snapshot_lock = threading.Lock()
+    osc_trigger: OSCTrigger | None = None
+
+    def do_snapshot() -> None:
+        end_beat = clock.beat
+        human_notes, _ = human.window(0.0)
+        with gen_lock:
+            machine_notes = list(committed_self)
+        with snapshot_lock:
+            song_id = f"{stamp}-{snapshot_count[0]:03d}"
+            result = save_snapshot(
+                human_notes, machine_notes, snapshot_root,
+                end_beat=end_beat, bars=snapshot_bars, beats_per_bar=beats_per_bar,
+                human_inst=snapshot_human_inst, machine_inst=snapshot_machine_inst,
+                artist=snapshot_artist, song_id=song_id,
+            )
+            if result is None:
+                print(f"snapshot: not enough played yet (need {snapshot_bars} bars).")
+                return
+            snapshot_count[0] += 1
+        human_path, machine_path = result
+        print(f"snapshot: saved last {snapshot_bars} bars -> {human_path} + {machine_path}")
+
+    def snapshot_loop() -> None:
+        for line in sys.stdin:  # blocking; ends when stdin closes
+            if stop.is_set():
+                break
+            if line.strip()[:1] == snapshot_key:
+                do_snapshot()
+
+    if snapshot_root is not None:
+        threading.Thread(target=snapshot_loop, daemon=True).start()
+        if snapshot_osc_port is not None and snapshot_osc_port > 0:
+            osc_trigger = OSCTrigger({snapshot_osc_addr: do_snapshot}, port=snapshot_osc_port).start()
+
     threading.Thread(target=gen_loop, daemon=True).start()
 
     try:
@@ -283,6 +336,8 @@ def duet(
             time.sleep(0.0007)
     finally:
         stop.set()
+        if osc_trigger is not None:
+            osc_trigger.close()
         release_all()
 
 
@@ -332,15 +387,30 @@ def main() -> None:
     parser.add_argument("--regular-temperature", type=float, default=0.15, help="near-greedy timing temp for the foundation")
     parser.add_argument("--snap-steps", type=int, default=2, help="snap foundation onsets to this grid (2=8th, 4=1/4, 0=off)")
     parser.add_argument("--seconds", type=float, default=None, help="stop after N seconds")
+    parser.add_argument("--snapshot-dir", default="data/MIDI", help="dataset root snapshots are saved into")
+    parser.add_argument("--no-snapshots", action="store_true", help="disable the keypress snapshot trigger")
+    parser.add_argument("--snapshot-bars", type=int, default=4, help="bars per snapshot (match the training chunk size)")
+    parser.add_argument("--snapshot-human-inst", default="Bass", help="instrument folder for your part")
+    parser.add_argument("--snapshot-machine-inst", default="Drums", help="instrument folder for the model's part")
+    parser.add_argument("--snapshot-artist", default="personal", help="artist folder snapshots land under")
+    parser.add_argument("--snapshot-key", default="s", help="key to press (then Enter) to save a snapshot")
+    parser.add_argument("--snapshot-osc-port", type=int, default=11002, help="UDP port to listen on for an OSC snapshot trigger (<=0 = off)")
+    parser.add_argument("--snapshot-osc-addr", default="/snapshot", help="OSC address that triggers a snapshot")
     args = parser.parse_args()
 
     model = load_model(args.checkpoint)
     clock = make_clock(args.link, bpm=args.bpm, quantum=args.quantum, start_stop_sync=args.start_stop_sync)
     tempo = "Ableton Link" if args.link else f"{args.bpm} BPM"
     with _open_input(args.in_port) as inp, _open_output(args.out_port) as out:
+        snap = "off" if args.no_snapshots else (
+            f"press {args.snapshot_key!r}+Enter"
+            + (f" or send OSC {args.snapshot_osc_addr} on UDP {args.snapshot_osc_port}"
+               if args.snapshot_osc_port > 0 else "")
+            + f" to save the last {args.snapshot_bars} bars to {args.snapshot_dir}"
+        )
         print(
             f"duet: listening to YOU on {args.in_port!r}, responding on {args.out_port!r} "
-            f"({tempo}). Play something. Ctrl-C to stop."
+            f"({tempo}). Play something. Snapshots: {snap}. Ctrl-C to stop."
         )
         try:
             duet(
@@ -361,6 +431,15 @@ def main() -> None:
                 regular_temperature=args.regular_temperature,
                 snap_steps=args.snap_steps,
                 seconds=args.seconds,
+                beats_per_bar=args.quantum,
+                snapshot_root=None if args.no_snapshots else args.snapshot_dir,
+                snapshot_bars=args.snapshot_bars,
+                snapshot_human_inst=args.snapshot_human_inst,
+                snapshot_machine_inst=args.snapshot_machine_inst,
+                snapshot_artist=args.snapshot_artist,
+                snapshot_key=args.snapshot_key,
+                snapshot_osc_port=None if args.no_snapshots else args.snapshot_osc_port,
+                snapshot_osc_addr=args.snapshot_osc_addr,
             )
         except KeyboardInterrupt:
             print("\nstopped.")

@@ -28,7 +28,7 @@ from typing import Iterable
 
 import mido
 
-from osc_genai.data.midi import load_midi_file, transpose
+from osc_genai.data.midi import load_midi_file, save_notes_midi, transpose
 from osc_genai.core.note import Note
 from osc_genai.core.event import DEFAULT_STEPS_PER_BEAT, PARTNER, SELF, Event, _quantize
 
@@ -237,31 +237,7 @@ def interleave_pairs(
 
 # -- materialization (optional, for inspection) -----------------------------------------------
 
-def _save_notes_midi(notes: list[Note], path: Path, ticks_per_beat: int = 480) -> None:
-    """Write a multi-channel Note list to a single-track ``.mid`` (channels preserved)."""
-    mid = mido.MidiFile(ticks_per_beat=ticks_per_beat)
-    track = mido.MidiTrack()
-    mid.tracks.append(track)
-    events: list[tuple[int, int, Note, bool]] = []
-    for note in notes:
-        on = int(round(note.start * ticks_per_beat))
-        off = on + max(1, int(round(note.duration * ticks_per_beat)))
-        events.append((on, 1, note, True))
-        events.append((off, 0, note, False))
-    events.sort(key=lambda e: (e[0], e[1]))  # note_off before note_on at the same tick
-    last = 0
-    for tick, _, note, is_on in events:
-        track.append(
-            mido.Message(
-                "note_on" if is_on else "note_off",
-                note=max(0, min(127, note.pitch)),
-                velocity=note.velocity if is_on else 0,
-                channel=max(0, min(15, note.channel)),
-                time=tick - last,
-            )
-        )
-        last = tick
-    mid.save(str(path))
+_save_notes_midi = save_notes_midi  # writer promoted to data.midi; kept as an alias for callers here
 
 
 def materialize(
