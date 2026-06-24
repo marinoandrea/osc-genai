@@ -1,0 +1,19 @@
+[project]
+name = "osc-genai"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "Andrea Marino", email = "a.marino@uva.nl" }
+]
+requires-python = ">=3.10"
+dependencies = [
+    "python-osc>=1.10.2",
+]
+
+[project.scripts]
+osc-genai = "osc_genai:main"
+
+[build-system]
+requires = ["uv_build>=0.8.15,<0.9.0"]
+build-backend = "uv_build"
