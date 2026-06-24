@@ -12,14 +12,15 @@ and time-scaling) expands the data; :func:`save_sequences` / :func:`load_sequenc
 from __future__ import annotations
 
 import json
+import random
 from pathlib import Path
 from typing import Iterable
 
 import mido
 import numpy as np
 
-from .ableton import AbletonOSC
-from .generate import Note
+from osc_genai.osc.ableton import AbletonOSC
+from osc_genai.core.note import Note
 
 # -- MIDI files -------------------------------------------------------------------------------
 
@@ -44,6 +45,7 @@ def load_midi_file(path: str | Path) -> list[Note]:
                         start=start_tick / ticks_per_beat,
                         duration=max(0.0, (abs_tick - start_tick) / ticks_per_beat),
                         velocity=velocity,
+                        channel=msg.channel,
                     )
                 )
     notes.sort(key=lambda n: (n.start, n.pitch))
@@ -110,6 +112,36 @@ def augment(
             if transposed:
                 out.append(transposed)
     return out
+
+
+def cross_pairs(
+    context: list[list[Note]], target: list[list[Note]], k: int = 4, seed: int = 0
+) -> list[tuple[list[Note], list[Note]]]:
+    """Build (context, target) pairs: each context clip paired with k random target clips.
+
+    Used for directional cross-role snapshots (e.g. bass->drums): the model learns to respond in the
+    target role given the context role. Drums are key-agnostic so any-to-any pairing is plausible;
+    co-performed pairs (via the session recorder) give tighter coupling.
+    """
+    rng = random.Random(seed)
+    pairs: list[tuple[list[Note], list[Note]]] = []
+    for ctx in context:
+        for tgt in rng.sample(target, k=min(k, len(target))):
+            pairs.append((ctx, tgt))
+    return pairs
+
+
+def combine_parts(parts: list[tuple[list[Note], int]]) -> list[Note]:
+    """Merge single-instrument sequences onto distinct channels into one multi-channel arrangement.
+
+    ``parts`` is ``[(notes, channel), ...]`` (e.g. bass on 0, drums on 9). Returns one onset-ordered
+    Note list spanning all channels — training material for a model that plays several instruments
+    at once.
+    """
+    merged: list[Note] = []
+    for notes, channel in parts:
+        merged.extend(note._replace(channel=channel) for note in notes)
+    return sorted(merged, key=lambda n: (n.start, n.pitch))
 
 
 # -- persistence ------------------------------------------------------------------------------
