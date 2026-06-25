@@ -97,7 +97,9 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    if not args.force and real_ableton_present(args.host, args.recv_port, args.reply_port):
+    if not args.force and real_ableton_present(
+        args.host, args.recv_port, args.reply_port
+    ):
         raise SystemExit(
             f"A real AbletonOSC is answering on {args.host}:{args.recv_port}. Refusing to start so "
             "the mock doesn't shadow your live set (note writes would hit Ableton). Close Ableton, "
@@ -105,7 +107,9 @@ def main() -> None:
         )
 
     reply_client = SimpleUDPClient(args.host, args.reply_port)
-    server = BlockingOSCUDPServer((args.host, args.recv_port), make_dispatcher(reply_client))
+    server = BlockingOSCUDPServer(
+        (args.host, args.recv_port), make_dispatcher(reply_client)
+    )
     print(
         f"Mock AbletonOSC listening on {args.host}:{args.recv_port}, replying on {args.reply_port}."
     )

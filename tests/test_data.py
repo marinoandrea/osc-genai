@@ -5,6 +5,7 @@ from __future__ import annotations
 import mido
 import numpy as np
 
+from osc_genai.core.note import Note
 from osc_genai.data.midi import (
     augment,
     jitter_velocity,
@@ -14,7 +15,6 @@ from osc_genai.data.midi import (
     scale_time,
     transpose,
 )
-from osc_genai.core.note import Note
 
 
 def test_load_midi_file_recovers_notes(tmp_path):
@@ -43,7 +43,9 @@ def test_jitter_velocity_is_bounded_and_deterministic():
     notes = [Note(60, 0.0, 1.0, 100), Note(62, 1.0, 1.0, 1)]
     out = jitter_velocity(notes, amount=10, rng=rng)
     assert all(1 <= n.velocity <= 127 for n in out)
-    assert all(abs(o.velocity - n.velocity) <= 10 for o, n in zip(out, notes))
+    assert all(
+        abs(o.velocity - n.velocity) <= 10 for o, n in zip(out, notes, strict=True)
+    )
 
 
 def test_scale_time():
@@ -72,7 +74,12 @@ def test_combine_parts_assigns_channels_and_orders():
     drums = [Note(36, 0.0, 0.25, 110), Note(42, 0.5, 0.25, 90)]
     merged = combine_parts([(bass, 0), (drums, 9)])
     assert {n.channel for n in merged} == {0, 9}
-    assert [n.start for n in merged] == [0.0, 0.0, 0.5, 1.0]  # onset-ordered across channels
+    assert [n.start for n in merged] == [
+        0.0,
+        0.0,
+        0.5,
+        1.0,
+    ]  # onset-ordered across channels
     assert all(n.channel == 9 for n in merged if n.pitch in (36, 42))
 
 

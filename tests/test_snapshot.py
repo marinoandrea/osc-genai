@@ -30,9 +30,15 @@ def test_save_snapshot_writes_aligned_pair(tmp_path):
     machine = _machine([16.0, 18.0, 24.0, 30.5])
 
     result = save_snapshot(
-        human, machine, tmp_path,
-        end_beat=33.0, bars=BARS, beats_per_bar=BPB,  # floors to bar boundary 32 -> window [16, 32)
-        human_inst="Bass", machine_inst="Drums", song_id="sess-000",
+        human,
+        machine,
+        tmp_path,
+        end_beat=33.0,
+        bars=BARS,
+        beats_per_bar=BPB,  # floors to bar boundary 32 -> window [16, 32)
+        human_inst="Bass",
+        machine_inst="Drums",
+        song_id="sess-000",
     )
     assert result is not None
     human_path, machine_path = result
@@ -52,9 +58,15 @@ def test_save_snapshot_writes_aligned_pair(tmp_path):
 
 def test_save_snapshot_returns_none_when_too_little_played(tmp_path):
     result = save_snapshot(
-        _human([1.0]), _machine([2.0]), tmp_path,
-        end_beat=8.0, bars=BARS, beats_per_bar=BPB,  # window would start at 8 - 16 < 0
-        human_inst="Bass", machine_inst="Drums", song_id="sess-000",
+        _human([1.0]),
+        _machine([2.0]),
+        tmp_path,
+        end_beat=8.0,
+        bars=BARS,
+        beats_per_bar=BPB,  # window would start at 8 - 16 < 0
+        human_inst="Bass",
+        machine_inst="Drums",
+        song_id="sess-000",
     )
     assert result is None
     assert not (tmp_path / "Bass").exists()
@@ -66,12 +78,20 @@ def test_snapshot_becomes_training_pair(tmp_path):
     human = _human([16.0, 18.0, 20.0, 28.0])
     machine = _machine([16.0, 17.0, 24.0, 30.0])
     save_snapshot(
-        human, machine, tmp_path,
-        end_beat=32.0, bars=BARS, beats_per_bar=BPB,
-        human_inst="Bass", machine_inst="Drums", song_id="sess-000",
+        human,
+        machine,
+        tmp_path,
+        end_beat=32.0,
+        bars=BARS,
+        beats_per_bar=BPB,
+        human_inst="Bass",
+        machine_inst="Drums",
+        song_id="sess-000",
     )
 
-    pairs = build_aligned_pairs(tmp_path, "Bass", "Drums", chunk_bars=BARS, normalize_drums=False)
+    pairs = build_aligned_pairs(
+        tmp_path, "Bass", "Drums", chunk_bars=BARS, normalize_drums=False
+    )
     assert pairs, "snapshot should reconstruct into at least one aligned pair"
     pair = pairs[0]
     assert pair.context and pair.target  # both stems present in the window

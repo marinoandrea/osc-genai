@@ -14,8 +14,8 @@ import pytest
 
 from osc_genai.realtime.live import DuetEngine, IntervalHarmonizer, NoteEvent
 
-
 # -- pure event conversion --------------------------------------------------------------------
+
 
 def test_from_message_note_on():
     event = NoteEvent.from_message(mido.Message("note_on", note=60, velocity=100))
@@ -33,12 +33,20 @@ def test_from_message_note_off():
 
 
 def test_non_note_message_is_ignored():
-    assert NoteEvent.from_message(mido.Message("control_change", control=1, value=10)) is None
+    assert (
+        NoteEvent.from_message(mido.Message("control_change", control=1, value=10))
+        is None
+    )
 
 
 def test_to_message_roundtrip_on():
     msg = NoteEvent(pitch=64, velocity=90, on=True).to_message(channel=2)
-    assert msg.type == "note_on" and msg.note == 64 and msg.velocity == 90 and msg.channel == 2
+    assert (
+        msg.type == "note_on"
+        and msg.note == 64
+        and msg.velocity == 90
+        and msg.channel == 2
+    )
 
 
 def test_to_message_note_off():
@@ -47,6 +55,7 @@ def test_to_message_note_off():
 
 
 # -- responder logic --------------------------------------------------------------------------
+
 
 def test_harmonizer_adds_intervals_on_note_on():
     out = IntervalHarmonizer(intervals=(4, 7)).respond(NoteEvent(60, 100, on=True))
@@ -70,6 +79,7 @@ def test_engine_handle_delegates_to_responder():
 
 
 # -- virtual-port loopback (best effort) ------------------------------------------------------
+
 
 def _can_open_virtual() -> bool:
     try:
@@ -97,7 +107,9 @@ def test_virtual_loopback_carries_a_note():
         time.sleep(0.1)
         names = [n for n in mido.get_input_names() if "osc-genai-loop" in n]
         if not names:
-            pytest.skip("virtual output is not routable to an input in-process on this host")
+            pytest.skip(
+                "virtual output is not routable to an input in-process on this host"
+            )
         inp = mido.open_input(names[0])
         try:
             time.sleep(0.05)

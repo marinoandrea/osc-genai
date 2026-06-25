@@ -4,15 +4,14 @@ from __future__ import annotations
 
 import torch
 
-from osc_genai.data.midi import transpose
+from osc_genai.core.event import SELF, notes_to_events
 from osc_genai.core.note import Note
+from osc_genai.core.vocab import EventCodec, VocabConfig
+from osc_genai.data.midi import transpose
+from osc_genai.data.pairs import interleave, interleave_pairs
 from osc_genai.inference import generate_phrase
 from osc_genai.model.factored import FactoredEventModel, ModelConfig
-from osc_genai.data.pairs import interleave, interleave_pairs
-from osc_genai.core.event import SELF, notes_to_events
-from osc_genai.training.train import TrainConfig, train
-from osc_genai.training.train import train_conditional
-from osc_genai.core.vocab import EventCodec, VocabConfig
+from osc_genai.training.train import TrainConfig, train, train_conditional
 
 
 def test_conditional_learns_a_complement():
@@ -25,12 +24,17 @@ def test_conditional_learns_a_complement():
 
     he, me = notes_to_events(human), notes_to_events(machine)
     history = train_conditional(
-        model, [(he, me)] * 8, config=TrainConfig(epochs=400, batch_size=8, lr=5e-3), log_every=0
+        model,
+        [(he, me)] * 8,
+        config=TrainConfig(epochs=400, batch_size=8, lr=5e-3),
+        log_every=0,
     )
     assert history[-1] < history[0]
 
     # Conditioned on the human, greedy generation reproduces the trained complement.
-    assert generate_phrase(model, context=human, temperature=0.0, max_events=10) == machine
+    assert (
+        generate_phrase(model, context=human, temperature=0.0, max_events=10) == machine
+    )
 
 
 def test_interleaved_joint_duet_overfits():
@@ -47,7 +51,11 @@ def test_interleaved_joint_duet_overfits():
     sequences = interleave_pairs([(bass, drums)] * 8)
 
     history = train(
-        model, sequences, codec=codec, config=TrainConfig(epochs=500, batch_size=8, lr=5e-3), log_every=0
+        model,
+        sequences,
+        codec=codec,
+        config=TrainConfig(epochs=500, batch_size=8, lr=5e-3),
+        log_every=0,
     )
     assert history[-1] < history[0]
 
@@ -58,7 +66,9 @@ def test_interleaved_joint_duet_overfits():
         state = model.observe(state, codec.encode(ev))
     emitted = []
     for _ in range(6):
-        fields, state = model.sample_next(state, temperature=0.0, force={source_field: SELF})
+        fields, state = model.sample_next(
+            state, temperature=0.0, force={source_field: SELF}
+        )
         if fields[0] == vocab.eos_pitch:
             break
         emitted.append(codec.decode(fields))

@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import threading
 from collections import deque
-from typing import Iterable
+from collections.abc import Iterable
 
 from pythonosc.dispatcher import Dispatcher
 from pythonosc.osc_server import ThreadingOSCUDPServer
@@ -187,7 +187,7 @@ class AbletonOSC:
         self._server.shutdown()
         self._server.server_close()
 
-    def __enter__(self) -> "AbletonOSC":
+    def __enter__(self) -> AbletonOSC:
         return self
 
     def __exit__(self, *exc) -> None:

@@ -12,8 +12,8 @@ import subprocess
 import sys
 from pathlib import Path
 
-from osc_genai.osc.ableton import AbletonOSC
 from osc_genai.core.note import Note, generate_notes, total_beats
+from osc_genai.osc.ableton import AbletonOSC
 
 MOCK = Path(__file__).resolve().parent.parent / "scripts" / "mock_ableton.py"
 RECV_PORT = 11900
@@ -33,9 +33,18 @@ def _wait_num_tracks(live: AbletonOSC, attempts: int = 50, timeout: float = 0.2)
 @contextlib.contextmanager
 def running_mock():
     """Yield a client connected to a freshly started mock on the isolated ports."""
-    live = AbletonOSC(send_port=RECV_PORT, recv_port=REPLY_PORT)  # binds REPLY_PORT first
+    live = AbletonOSC(
+        send_port=RECV_PORT, recv_port=REPLY_PORT
+    )  # binds REPLY_PORT first
     proc = subprocess.Popen(
-        [sys.executable, str(MOCK), "--recv-port", str(RECV_PORT), "--reply-port", str(REPLY_PORT)],
+        [
+            sys.executable,
+            str(MOCK),
+            "--recv-port",
+            str(RECV_PORT),
+            "--reply-port",
+            str(REPLY_PORT),
+        ],
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
@@ -43,7 +52,9 @@ def running_mock():
     try:
         # The mock answers 3 tracks; a real Ableton would answer otherwise. Blocking here until it
         # responds also confirms the test stayed isolated from any live set.
-        assert _wait_num_tracks(live) == 3, "expected the MOCK (3 tracks), not a real Ableton"
+        assert _wait_num_tracks(live) == 3, (
+            "expected the MOCK (3 tracks), not a real Ableton"
+        )
         yield live
     finally:
         proc.terminate()

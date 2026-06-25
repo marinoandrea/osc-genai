@@ -28,8 +28,12 @@ class VocabConfig:
     velocity_bins: int = 16
     num_channels: int = 16  # MIDI channels 0-15
     num_sources: int = 2  # duet roles: PARTNER, SELF
-    use_phase: bool = False  # feed bar-relative grid position as an input-only conditioning feature
-    steps_per_bar: int = 16  # grid steps per bar (4 beats * 4 steps), the period of the phase feature
+    use_phase: bool = (
+        False  # feed bar-relative grid position as an input-only conditioning feature
+    )
+    steps_per_bar: int = (
+        16  # grid steps per bar (4 beats * 4 steps), the period of the phase feature
+    )
 
     @property
     def eos_pitch(self) -> int:
@@ -85,7 +89,14 @@ class EventCodec:
         dur = _clamp(event.dur, 1, cfg.max_dur)
         channel = _clamp(event.channel, 0, cfg.num_channels - 1)
         source = _clamp(event.source, 0, cfg.num_sources - 1)
-        return (pitch, dt, dur - 1, self._encode_velocity(event.velocity), channel, source)
+        return (
+            pitch,
+            dt,
+            dur - 1,
+            self._encode_velocity(event.velocity),
+            channel,
+            source,
+        )
 
     def decode(self, fields: Fields) -> Event:
         pitch, dt, dur_idx, vel_idx, channel, source = fields
@@ -117,7 +128,9 @@ class EventCodec:
         return fields[0] == self.config.eos_pitch
 
     # -- sequences ------------------------------------------------------------------------------
-    def encode_sequence(self, events: list[Event], add_eos: bool = True) -> list[Fields]:
+    def encode_sequence(
+        self, events: list[Event], add_eos: bool = True
+    ) -> list[Fields]:
         encoded = [self.encode(e) for e in events]
         if add_eos:
             encoded.append(self.eos)

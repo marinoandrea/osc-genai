@@ -15,7 +15,20 @@ from osc_genai.core.note import Note
 
 GM_KICK, GM_SNARE, GM_CHAT, GM_OHAT = 36, 38, 42, 46
 # Fallback GM slots for the remaining notes, assigned by ascending source pitch.
-GM_OTHER = [45, 47, 48, 50, 41, 43, 51, 49, 39, 37, 56, 54]  # toms, ride, crash, clap, rim, cowbell
+GM_OTHER = [
+    45,
+    47,
+    48,
+    50,
+    41,
+    43,
+    51,
+    49,
+    39,
+    37,
+    56,
+    54,
+]  # toms, ride, crash, clap, rim, cowbell
 _ROLE = {36: "kick", 38: "snare", 42: "c-hat", 46: "o-hat"}
 
 
@@ -32,13 +45,15 @@ def analyze_drums(notes: list[Note], bar_beats: int = 4) -> list[dict]:
     for pitch, hits in groups.items():
         beats = [_beat_of_bar(h.start, bar_beats) for h in hits]
         count = len(hits)
-        rows.append({
-            "note": pitch,
-            "count": count,
-            "backbeat": sum(b in (1, 3) for b in beats) / count,
-            "beat0": sum(b == 0 for b in beats) / count,
-            "vel": sum(h.velocity for h in hits) / count,
-        })
+        rows.append(
+            {
+                "note": pitch,
+                "count": count,
+                "backbeat": sum(b in (1, 3) for b in beats) / count,
+                "beat0": sum(b == 0 for b in beats) / count,
+                "vel": sum(h.velocity for h in hits) / count,
+            }
+        )
     return sorted(rows, key=lambda r: -r["count"])
 
 
@@ -52,7 +67,9 @@ def infer_drum_map(notes: list[Note], bar_beats: int = 4) -> dict[int, int]:
         candidates = [r for r in rows if r["note"] not in used]
         return max(candidates, key=key) if candidates else None
 
-    snare = pick(lambda r: (r["backbeat"], r["count"]))  # backbeat is the strongest role cue
+    snare = pick(
+        lambda r: (r["backbeat"], r["count"])
+    )  # backbeat is the strongest role cue
     if snare and snare["count"] >= 2 and snare["backbeat"] > 0:
         mapping[snare["note"]] = GM_SNARE
         used.add(snare["note"])
@@ -82,7 +99,9 @@ def normalize_drums(
 
 
 def regularize_drums(
-    notes: list[Note], grid_beats: float = 0.5, pitches: tuple[int, ...] = (GM_KICK, GM_SNARE)
+    notes: list[Note],
+    grid_beats: float = 0.5,
+    pitches: tuple[int, ...] = (GM_KICK, GM_SNARE),
 ) -> list[Note]:
     """Snap kick/snare onsets to a coarser grid, leaving hats/percussion free.
 
@@ -112,7 +131,9 @@ def is_kit(notes: list[Note], min_distinct: int = 3) -> bool:
     return len({n.pitch for n in notes}) >= min_distinct
 
 
-def load_drum_kits(dirs, min_distinct: int = 3, normalize: bool = True) -> list[list[Note]]:
+def load_drum_kits(
+    dirs, min_distinct: int = 3, normalize: bool = True
+) -> list[list[Note]]:
     """Load drum clips from ``dirs``, keep only full kits (drop extracted stems), normalize to GM."""
     from osc_genai.data.midi import load_midi_dir
 

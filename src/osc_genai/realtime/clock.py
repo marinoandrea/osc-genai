@@ -47,7 +47,7 @@ class WallClock:
         return 0
 
 
-def _ensure_event_loop() -> "asyncio.AbstractEventLoop":
+def _ensure_event_loop() -> asyncio.AbstractEventLoop:
     """aalink's ``Link`` is built around an asyncio loop; we only read properties, so it need not
     run — but a loop must exist for construction. Reuse the current one or make a fresh one."""
     try:
@@ -61,8 +61,12 @@ def _ensure_event_loop() -> "asyncio.AbstractEventLoop":
 class LinkClock:
     """Ableton Link session clock: shared beat timeline, tempo, and transport with Live."""
 
-    def __init__(self, bpm: float, quantum: int = 4, start_stop_sync: bool = True) -> None:
-        from aalink import Link  # lazy: optional dependency, imported only when --link is used
+    def __init__(
+        self, bpm: float, quantum: int = 4, start_stop_sync: bool = True
+    ) -> None:
+        from aalink import (
+            Link,  # lazy: optional dependency, imported only when --link is used
+        )
 
         # aalink schedules sync() callbacks on an asyncio loop. We only read properties (beat/tempo/
         # playing), so the loop never has to run — but aalink 0.2.x grabs the *running* loop at
@@ -98,7 +102,9 @@ class LinkClock:
         return self._link.num_peers
 
 
-def make_clock(use_link: bool, *, bpm: float, quantum: int = 4, start_stop_sync: bool = True):
+def make_clock(
+    use_link: bool, *, bpm: float, quantum: int = 4, start_stop_sync: bool = True
+):
     """Build the clock the realtime loops read from: :class:`LinkClock` when ``use_link``, else
     :class:`WallClock`. Raises a helpful error if Link is requested but ``aalink`` isn't installed."""
     if not use_link:

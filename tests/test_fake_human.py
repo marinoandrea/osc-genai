@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from osc_genai.realtime.fake_human import _ACID, loop_length_beats, play_loop
 from osc_genai.core.note import Note
 from osc_genai.realtime.clock import WallClock
+from osc_genai.realtime.fake_human import _ACID, loop_length_beats, play_loop
 
 
 class _FakeOut:

@@ -3,7 +3,6 @@
 Pure data — no torch, no IO. ``from osc_genai.core import Note, Event, EventCodec``.
 """
 
-from osc_genai.core.note import Note
 from osc_genai.core.event import (
     DEFAULT_STEPS_PER_BEAT,
     PARTNER,
@@ -12,7 +11,8 @@ from osc_genai.core.event import (
     events_to_notes,
     notes_to_events,
 )
-from osc_genai.core.vocab import EventCodec, Fields, MIDI_RANGE, VocabConfig
+from osc_genai.core.note import Note
+from osc_genai.core.vocab import MIDI_RANGE, EventCodec, Fields, VocabConfig
 
 __all__ = [
     "Note",

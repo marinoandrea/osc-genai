@@ -5,9 +5,9 @@ from __future__ import annotations
 import torch
 
 from osc_genai.core.device import resolve_device
-from osc_genai.model.factored import FactoredEventModel, ModelConfig
-from osc_genai.model.checkpoint import load_model, save_model
 from osc_genai.core.vocab import VocabConfig
+from osc_genai.model.checkpoint import load_model, save_model
+from osc_genai.model.factored import FactoredEventModel, ModelConfig
 
 
 def test_explicit_spec_is_honoured():
@@ -31,7 +31,9 @@ def test_auto_prefers_accelerator_when_present():
 
 def test_load_model_places_weights_on_device(tmp_path):
     torch.manual_seed(0)
-    model = FactoredEventModel(VocabConfig(), ModelConfig(embed_dim=16, hidden_size=32, num_layers=1))
+    model = FactoredEventModel(
+        VocabConfig(), ModelConfig(embed_dim=16, hidden_size=32, num_layers=1)
+    )
     path = tmp_path / "model.pt"
     save_model(model, path)
 

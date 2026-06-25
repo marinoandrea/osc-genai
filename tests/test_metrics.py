@@ -28,7 +28,9 @@ def test_longest_copied_run():
 
 
 def test_distinct_n():
-    assert distinct_n([[1, 1, 1, 1]], n=2) == pytest.approx(1 / 3)  # (1,1) x3 -> 1 unique
+    assert distinct_n([[1, 1, 1, 1]], n=2) == pytest.approx(
+        1 / 3
+    )  # (1,1) x3 -> 1 unique
     assert distinct_n([[1, 2, 3]], n=2) == 1.0  # (1,2),(2,3) all unique
 
 

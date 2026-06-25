@@ -29,10 +29,14 @@ def _midi_to_hz(pitch: int) -> float:
     return 440.0 * 2 ** ((pitch - 69) / 12)
 
 
-def _feed_tone(tracker: PitchTracker, clk: FakeClock, pitch: int, seconds: float) -> None:
+def _feed_tone(
+    tracker: PitchTracker, clk: FakeClock, pitch: int, seconds: float
+) -> None:
     hz = _midi_to_hz(pitch)
     for i in range(int(seconds * SR / BLOCK)):
-        clk.beat += BLOCK / SR * 2.0  # advance beats (120 BPM) so onsets carry a sensible time
+        clk.beat += (
+            BLOCK / SR * 2.0
+        )  # advance beats (120 BPM) so onsets carry a sensible time
         t = (np.arange(BLOCK) + i * BLOCK) / SR  # continuous phase across blocks
         tracker.feed(0.5 * np.sin(2 * np.pi * hz * t))
 
@@ -45,7 +49,10 @@ def _feed_silence(tracker: PitchTracker, clk: FakeClock, seconds: float) -> None
 
 def _pipeline(human: HumanStream) -> tuple[PitchTracker, NoteSegmenter]:
     seg = NoteSegmenter(
-        note_on=human.note_on, note_off=human.note_off, confidence=0.4, noise_floor=0.001
+        note_on=human.note_on,
+        note_off=human.note_off,
+        confidence=0.4,
+        noise_floor=0.001,
     )
     tracker = PitchTracker(Yin(SR, FRAME, 0.15), seg, frame_size=FRAME, hop=HOP)
     return tracker, seg
@@ -81,7 +88,13 @@ def test_two_tones_become_two_notes_in_order():
 
 def test_audio_partner_stop_is_safe_before_start():
     partner = AudioPartnerInput(
-        device="nonexistent", samplerate=SR, blocksize=BLOCK, frame_size=FRAME, hop=HOP,
-        yin_threshold=0.15, confidence=0.5, noise_floor=0.01,
+        device="nonexistent",
+        samplerate=SR,
+        blocksize=BLOCK,
+        frame_size=FRAME,
+        hop=HOP,
+        yin_threshold=0.15,
+        confidence=0.5,
+        noise_floor=0.01,
     )
     partner.stop()  # no capture started yet — must not raise

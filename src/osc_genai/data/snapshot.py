@@ -54,7 +54,9 @@ def save_snapshot(
         return None
 
     human_path = Path(out_root) / human_inst / artist / f"{song_id}__{label_human}.mid"
-    machine_path = Path(out_root) / machine_inst / artist / f"{song_id}__{label_machine}.mid"
+    machine_path = (
+        Path(out_root) / machine_inst / artist / f"{song_id}__{label_machine}.mid"
+    )
     for path, chunk in ((human_path, human_chunk), (machine_path, machine_chunk)):
         path.parent.mkdir(parents=True, exist_ok=True)
         save_notes_midi(chunk, path)

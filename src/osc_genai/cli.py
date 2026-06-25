@@ -6,8 +6,8 @@ for notes, then create a clip and write the notes into it via OSC.
 
 from __future__ import annotations
 
-from osc_genai.osc.ableton import AbletonOSC
 from osc_genai.core.note import generate_notes, total_beats
+from osc_genai.osc.ableton import AbletonOSC
 
 # Hardcoded for now — the track and clip slot we operate on.
 TRACK_INDEX = 0

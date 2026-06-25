@@ -72,7 +72,9 @@ class NoteSegmenter:
 
     def process(self, f0_hz: float, probability: float, rms: float) -> None:
         """Feed one analysis frame; fires note_on/note_off callbacks as the line evolves."""
-        voiced = f0_hz > 0.0 and probability >= self.confidence and rms >= self.noise_floor
+        voiced = (
+            f0_hz > 0.0 and probability >= self.confidence and rms >= self.noise_floor
+        )
         if not voiced:
             self._silence += 1
             self._hist.clear()

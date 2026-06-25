@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import math
-
 from osc_genai.audio.segment import NoteSegmenter, hz_to_midi
 
 

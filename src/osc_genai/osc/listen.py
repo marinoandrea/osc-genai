@@ -38,7 +38,7 @@ class OSCTrigger:
         self._server = ThreadingOSCUDPServer((host, port), dispatcher)
         self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
 
-    def start(self) -> "OSCTrigger":
+    def start(self) -> OSCTrigger:
         self._thread.start()
         return self
 
@@ -46,7 +46,7 @@ class OSCTrigger:
         self._server.shutdown()
         self._server.server_close()
 
-    def __enter__(self) -> "OSCTrigger":
+    def __enter__(self) -> OSCTrigger:
         return self.start()
 
     def __exit__(self, *exc) -> None:

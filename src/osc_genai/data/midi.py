@@ -13,23 +13,26 @@ from __future__ import annotations
 
 import json
 import random
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Iterable
 
 import mido
 import numpy as np
 
-from osc_genai.osc.ableton import AbletonOSC
 from osc_genai.core.note import Note
+from osc_genai.osc.ableton import AbletonOSC
 
 # -- MIDI files -------------------------------------------------------------------------------
+
 
 def load_midi_file(path: str | Path) -> list[Note]:
     """Parse a ``.mid`` file into onset-ordered ``Note``s, timed in beats (tempo-independent)."""
     mid = mido.MidiFile(str(path))
     ticks_per_beat = mid.ticks_per_beat
     notes: list[Note] = []
-    active: dict[tuple[int, int], tuple[int, int]] = {}  # (channel, pitch) -> (start_tick, vel)
+    active: dict[
+        tuple[int, int], tuple[int, int]
+    ] = {}  # (channel, pitch) -> (start_tick, vel)
     abs_tick = 0
     for msg in mido.merge_tracks(mid.tracks):
         abs_tick += msg.time
@@ -59,7 +62,9 @@ def load_midi_dir(directory: str | Path) -> list[list[Note]]:
     return [load_midi_file(p) for p in paths]
 
 
-def save_notes_midi(notes: list[Note], path: str | Path, ticks_per_beat: int = 480) -> None:
+def save_notes_midi(
+    notes: list[Note], path: str | Path, ticks_per_beat: int = 480
+) -> None:
     """Write a multi-channel ``Note`` list to a single-track ``.mid`` (channels preserved)."""
     mid = mido.MidiFile(ticks_per_beat=ticks_per_beat)
     track = mido.MidiTrack()
@@ -88,6 +93,7 @@ def save_notes_midi(notes: list[Note], path: str | Path, ticks_per_beat: int = 4
 
 # -- Ableton capture --------------------------------------------------------------------------
 
+
 def capture_from_ableton(
     live: AbletonOSC, slots: int = 8, tracks: Iterable[int] | None = None
 ) -> list[list[Note]]:
@@ -105,6 +111,7 @@ def capture_from_ableton(
 
 # -- augmentation -----------------------------------------------------------------------------
 
+
 def transpose(notes: list[Note], semitones: int) -> list[Note]:
     """Shift pitch; notes pushed outside 0-127 are dropped."""
     out = []
@@ -115,17 +122,26 @@ def transpose(notes: list[Note], semitones: int) -> list[Note]:
     return out
 
 
-def jitter_velocity(notes: list[Note], amount: int, rng: np.random.Generator) -> list[Note]:
+def jitter_velocity(
+    notes: list[Note], amount: int, rng: np.random.Generator
+) -> list[Note]:
     """Add uniform noise in ``[-amount, amount]`` to each velocity (clamped to 1-127)."""
     return [
-        note._replace(velocity=int(np.clip(note.velocity + rng.integers(-amount, amount + 1), 1, 127)))
+        note._replace(
+            velocity=int(
+                np.clip(note.velocity + rng.integers(-amount, amount + 1), 1, 127)
+            )
+        )
         for note in notes
     ]
 
 
 def scale_time(notes: list[Note], factor: float) -> list[Note]:
     """Stretch/compress onsets and durations by ``factor`` (tempo feel, same pitches)."""
-    return [note._replace(start=note.start * factor, duration=note.duration * factor) for note in notes]
+    return [
+        note._replace(start=note.start * factor, duration=note.duration * factor)
+        for note in notes
+    ]
 
 
 def augment(
@@ -172,6 +188,7 @@ def combine_parts(parts: list[tuple[list[Note], int]]) -> list[Note]:
 
 
 # -- persistence ------------------------------------------------------------------------------
+
 
 def save_sequences(sequences: list[list[Note]], path: str | Path) -> None:
     """Persist Note sequences as JSON (a list of clips, each a list of note tuples)."""

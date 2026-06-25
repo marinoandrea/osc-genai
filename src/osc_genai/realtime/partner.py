@@ -44,7 +44,9 @@ class HumanStream:
         now_beats = self._beat_now()
         with self._lock:
             self._active[pitch] = len(self._notes)
-            self._notes.append(Note(pitch, now_beats, 0.25, velocity, False, self._channel))
+            self._notes.append(
+                Note(pitch, now_beats, 0.25, velocity, False, self._channel)
+            )
             self.note_count += 1
 
     def note_off(self, pitch: int) -> None:
@@ -55,7 +57,7 @@ class HumanStream:
                 n = self._notes[idx]
                 self._notes[idx] = n._replace(duration=max(0.0625, now_beats - n.start))
 
-    def on_message(self, msg: "mido.Message") -> None:
+    def on_message(self, msg: mido.Message) -> None:
         if msg.type == "note_on" and msg.velocity > 0:
             self.note_on(msg.note, msg.velocity)
         elif msg.type in ("note_off", "note_on"):  # note_on vel 0 is a note_off
@@ -74,15 +76,23 @@ class MidiPartnerInput:
     they share the duet's clock (default 0); pass ``None`` to disable.
     """
 
-    def __init__(self, inp: "mido.ports.BaseInput", echo_channel: int | None = 0) -> None:
+    def __init__(self, inp: mido.ports.BaseInput, echo_channel: int | None = 0) -> None:
         self._inp = inp
         self._echo_channel = echo_channel
 
-    def start(self, human: HumanStream, send: Callable[["mido.Message"], None], stop: "threading.Event") -> None:
+    def start(
+        self,
+        human: HumanStream,
+        send: Callable[[mido.Message], None],
+        stop: threading.Event,
+    ) -> None:
         def pump() -> None:
             for msg in self._inp:  # blocking; ends when the port closes
                 human.on_message(msg)
-                if self._echo_channel is not None and msg.type in ("note_on", "note_off"):
+                if self._echo_channel is not None and msg.type in (
+                    "note_on",
+                    "note_off",
+                ):
                     send(msg.copy(channel=self._echo_channel))
                 if stop.is_set():
                     break
@@ -131,7 +141,12 @@ class AudioPartnerInput:
         self._echo_channel = echo_channel
         self._capture = None
 
-    def start(self, human: HumanStream, send: Callable[["mido.Message"], None], stop: "threading.Event") -> None:
+    def start(
+        self,
+        human: HumanStream,
+        send: Callable[[mido.Message], None],
+        stop: threading.Event,
+    ) -> None:
         # Imported here so the MIDI path (and the package import) never needs audio deps.
         from osc_genai.audio.capture import AudioCapture
         from osc_genai.audio.segment import NoteSegmenter
@@ -141,12 +156,23 @@ class AudioPartnerInput:
         def on_note_on(pitch: int, velocity: int) -> None:
             human.note_on(pitch, velocity)
             if self._echo_channel is not None:
-                send(mido.Message("note_on", note=pitch, velocity=velocity, channel=self._echo_channel))
+                send(
+                    mido.Message(
+                        "note_on",
+                        note=pitch,
+                        velocity=velocity,
+                        channel=self._echo_channel,
+                    )
+                )
 
         def on_note_off(pitch: int) -> None:
             human.note_off(pitch)
             if self._echo_channel is not None:
-                send(mido.Message("note_off", note=pitch, velocity=0, channel=self._echo_channel))
+                send(
+                    mido.Message(
+                        "note_off", note=pitch, velocity=0, channel=self._echo_channel
+                    )
+                )
 
         segmenter = NoteSegmenter(
             note_on=on_note_on,

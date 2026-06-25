@@ -22,7 +22,11 @@ def test_human_stream_records_noteons_as_partner_notes():
         s.on_message(mido.Message("note_on", note=pitch, velocity=100))
     notes, count = s.window(0.0)
     assert [n.pitch for n in notes] == [60, 64, 67]
-    assert [n.start for n in notes] == [0.0, 0.5, 1.0]  # captured on the shared beat clock
+    assert [n.start for n in notes] == [
+        0.0,
+        0.5,
+        1.0,
+    ]  # captured on the shared beat clock
     assert all(n.channel == 0 and n.velocity == 100 for n in notes)
     assert count == 3
 

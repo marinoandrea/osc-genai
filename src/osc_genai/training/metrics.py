@@ -15,16 +15,21 @@ high novelty but low style match.
 from __future__ import annotations
 
 from collections import Counter
-from typing import Iterable, Sequence
+from collections.abc import Iterable, Sequence
 
 import torch
 
-from osc_genai.training.train import collate
 from osc_genai.core.vocab import EventCodec
+from osc_genai.training.train import collate
 
 
-def dataset_loss(model, event_sequences, codec: EventCodec | None = None, batch_size: int = 32,
-                 device: str = "cpu") -> float:
+def dataset_loss(
+    model,
+    event_sequences,
+    codec: EventCodec | None = None,
+    batch_size: int = 32,
+    device: str = "cpu",
+) -> float:
     """Mean per-batch loss over a dataset (no grad) — compare train vs held-out to see overfitting."""
     codec = codec or EventCodec(model.vocab)
     model.eval()
@@ -42,7 +47,9 @@ def _ngrams(seq: Sequence[int], n: int) -> list[tuple[int, ...]]:
     return [tuple(seq[i : i + n]) for i in range(len(seq) - n + 1)]
 
 
-def ngram_novelty(generated: list[list[int]], train: list[list[int]], n: int = 4) -> float:
+def ngram_novelty(
+    generated: list[list[int]], train: list[list[int]], n: int = 4
+) -> float:
     """Fraction of generated n-grams not present anywhere in training (1 = fully novel)."""
     train_ngrams: set[tuple[int, ...]] = set()
     for seq in train:

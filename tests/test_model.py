@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import torch
 
-from osc_genai.model.factored import FactoredEventModel, ModelConfig
 from osc_genai.core.event import Event
 from osc_genai.core.vocab import EventCodec, VocabConfig
+from osc_genai.model.factored import FactoredEventModel, ModelConfig
 
 
 def make_model() -> FactoredEventModel:
@@ -26,8 +26,10 @@ def test_forward_shapes():
     model = make_model()
     targets = _random_targets(model, batch=2, length=5)
     logits = model(targets)
-    assert len(logits) == len(model.vocab.field_sizes)  # pitch, dt, dur, velocity, channel, source
-    for field_logits, size in zip(logits, model.vocab.field_sizes):
+    assert len(logits) == len(
+        model.vocab.field_sizes
+    )  # pitch, dt, dur, velocity, channel, source
+    for field_logits, size in zip(logits, model.vocab.field_sizes, strict=True):
         assert field_logits.shape == (2, 5, size)
 
 
@@ -49,16 +51,20 @@ def test_generate_returns_valid_fields():
     assert isinstance(out, list)
     for fields in out:
         assert len(fields) == len(model.vocab.field_sizes)
-        for index, size in zip(fields, model.vocab.field_sizes):
+        for index, size in zip(fields, model.vocab.field_sizes, strict=True):
             assert 0 <= index < size
-        assert fields[0] != model.vocab.eos_pitch  # EOS is the stop signal, never emitted
+        assert (
+            fields[0] != model.vocab.eos_pitch
+        )  # EOS is the stop signal, never emitted
 
 
 def test_generate_with_context_runs():
     torch.manual_seed(0)
     model = make_model()
     codec = EventCodec(model.vocab)
-    context = codec.encode_sequence([Event(60, 0, 4, 100), Event(62, 4, 4, 100)], add_eos=False)
+    context = codec.encode_sequence(
+        [Event(60, 0, 4, 100), Event(62, 4, 4, 100)], add_eos=False
+    )
     out = model.generate(context=context, max_events=8)
     assert isinstance(out, list)
 
@@ -88,9 +94,13 @@ def test_streaming_matches_generate():
 def test_phase_model_trains_and_generates():
     """With use_phase the input widens by one embedding; heads/loss are unchanged (6 predicted fields)."""
     torch.manual_seed(0)
-    vocab = VocabConfig(max_dt=16, max_dur=16, velocity_bins=8, use_phase=True, steps_per_bar=16)
+    vocab = VocabConfig(
+        max_dt=16, max_dur=16, velocity_bins=8, use_phase=True, steps_per_bar=16
+    )
     model = FactoredEventModel(vocab, ModelConfig(embed_dim=16, hidden_size=32))
-    assert model.rnn.input_size == 16 * (len(vocab.field_sizes) + 1)  # +1 for the phase feature
+    assert model.rnn.input_size == 16 * (
+        len(vocab.field_sizes) + 1
+    )  # +1 for the phase feature
 
     targets = _random_targets(model, batch=2, length=5)
     logits = model(targets)
@@ -119,5 +129,7 @@ def test_sample_next_force_pins_a_field():
     source_field = len(model.vocab.field_sizes) - 1
     state = model.fresh_state()
     for _ in range(20):
-        fields, state = model.sample_next(state, temperature=1.0, force={source_field: SELF})
+        fields, state = model.sample_next(
+            state, temperature=1.0, force={source_field: SELF}
+        )
         assert fields[source_field] == SELF

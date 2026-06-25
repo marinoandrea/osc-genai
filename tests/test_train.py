@@ -4,13 +4,18 @@ from __future__ import annotations
 
 import torch
 
-from osc_genai.model.factored import FactoredEventModel, ModelConfig
 from osc_genai.core.event import Event
-from osc_genai.training.train import TrainConfig, collate, load_model, save_model, train
 from osc_genai.core.vocab import EventCodec, VocabConfig
+from osc_genai.model.factored import FactoredEventModel, ModelConfig
+from osc_genai.training.train import TrainConfig, collate, load_model, save_model, train
 
 # velocity 100 is a 16-bin centre, so it round-trips exactly through the codec.
-PATTERN = [Event(60, 0, 2, 100), Event(62, 2, 2, 100), Event(64, 2, 2, 100), Event(65, 2, 2, 100)]
+PATTERN = [
+    Event(60, 0, 2, 100),
+    Event(62, 2, 2, 100),
+    Event(64, 2, 2, 100),
+    Event(65, 2, 2, 100),
+]
 
 
 def test_collate_pads_and_masks():
@@ -28,15 +33,21 @@ def test_pitch_class_weights_upweight_rare():
     from osc_genai.training.train import pitch_class_weights
 
     codec = EventCodec(VocabConfig())
-    seq = codec.encode_sequence([Event(60, 0, 1, 100)] * 8 + [Event(64, 0, 1, 100)], add_eos=False)
+    seq = codec.encode_sequence(
+        [Event(60, 0, 1, 100)] * 8 + [Event(64, 0, 1, 100)], add_eos=False
+    )
     weights = pitch_class_weights([seq], codec.config.pitch_vocab)
-    assert weights[64] > weights[60]  # the rare pitch is up-weighted relative to the frequent one
+    assert (
+        weights[64] > weights[60]
+    )  # the rare pitch is up-weighted relative to the frequent one
 
 
 def _overfit_model() -> tuple[FactoredEventModel, VocabConfig]:
     torch.manual_seed(0)
     vocab = VocabConfig(max_dt=8, max_dur=8, velocity_bins=16)
-    model = FactoredEventModel(vocab, ModelConfig(embed_dim=16, hidden_size=64, num_layers=1))
+    model = FactoredEventModel(
+        vocab, ModelConfig(embed_dim=16, hidden_size=64, num_layers=1)
+    )
     history = train(
         model,
         [PATTERN] * 8,

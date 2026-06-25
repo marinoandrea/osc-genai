@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from osc_genai.core.note import Note
 from osc_genai.core.event import events_to_notes, notes_to_events
+from osc_genai.core.note import Note
 
 
 def test_roundtrip_on_grid_melody_is_exact():

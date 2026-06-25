@@ -57,10 +57,14 @@ class FactoredEventModel(nn.Module):
             batch_first=True,
             dropout=self.config.dropout if self.config.num_layers > 1 else 0.0,
         )
-        self.heads = nn.ModuleList([nn.Linear(self.config.hidden_size, size) for size in sizes])
+        self.heads = nn.ModuleList(
+            [nn.Linear(self.config.hidden_size, size) for size in sizes]
+        )
 
     # -- core -----------------------------------------------------------------------------------
-    def embed(self, fields: torch.Tensor, phase: torch.Tensor | None = None) -> torch.Tensor:
+    def embed(
+        self, fields: torch.Tensor, phase: torch.Tensor | None = None
+    ) -> torch.Tensor:
         """``(..., num_fields)`` long field indices -> ``(..., input_dim)`` embedding.
 
         With ``use_phase`` the per-event bar phase ``(...)`` long must be supplied and is embedded
@@ -86,7 +90,11 @@ class FactoredEventModel(nn.Module):
         (cumulative ``dt``) mod bar, so each event carries its own metrical position.
         """
         batch = targets.shape[0]
-        phase = self._phase_of(torch.cumsum(targets[..., 1], dim=1)) if self.vocab.use_phase else None
+        phase = (
+            self._phase_of(torch.cumsum(targets[..., 1], dim=1))
+            if self.vocab.use_phase
+            else None
+        )
         emb = self.embed(targets, phase)  # (B, L, input_dim)
         start = self.start.view(1, 1, -1).expand(batch, 1, -1)
         inp = torch.cat([start, emb[:, :-1, :]], dim=1)  # (B, L, input_dim)
@@ -94,7 +102,10 @@ class FactoredEventModel(nn.Module):
         return self._logits(out)
 
     def loss(
-        self, targets: torch.Tensor, mask: torch.Tensor, pitch_weights: torch.Tensor | None = None
+        self,
+        targets: torch.Tensor,
+        mask: torch.Tensor,
+        pitch_weights: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Sum of per-field cross-entropies, averaged over masked positions.
 
@@ -105,15 +116,19 @@ class FactoredEventModel(nn.Module):
         """
         logits = self.forward(targets)
         eos = targets[..., 0] == self.vocab.eos_pitch
-        other = mask & ~eos  # dt/dur/velocity/channel are meaningless at the EOS position
+        other = (
+            mask & ~eos
+        )  # dt/dur/velocity/channel are meaningless at the EOS position
         masks = [mask] + [other] * (targets.shape[-1] - 1)
         total = torch.zeros((), device=targets.device)
-        for i, (field_logits, field_mask) in enumerate(zip(logits, masks)):
+        for i, (field_logits, field_mask) in enumerate(zip(logits, masks, strict=True)):
             vocab = field_logits.shape[-1]
             ce = F.cross_entropy(
                 field_logits.reshape(-1, vocab),
                 targets[..., i].reshape(-1),
-                weight=pitch_weights if i == 0 else None,  # re-balance the pitch head only
+                weight=pitch_weights
+                if i == 0
+                else None,  # re-balance the pitch head only
                 reduction="none",
             ).reshape(targets.shape[:2])
             total = total + (ce * field_mask).sum() / field_mask.sum().clamp(min=1)
@@ -139,14 +154,22 @@ class FactoredEventModel(nn.Module):
         return hidden, onset0
 
     @torch.no_grad()
-    def observe(self, state: tuple[torch.Tensor, int], fields: Fields) -> tuple[torch.Tensor, int]:
+    def observe(
+        self, state: tuple[torch.Tensor, int], fields: Fields
+    ) -> tuple[torch.Tensor, int]:
         """Advance the state by one teacher-forced event (partner or committed self), emitting nothing."""
         hidden, onset = state
         onset += fields[1]  # dt (in grid steps) advances the running onset
         phase = None
         if self.vocab.use_phase:
-            phase = torch.tensor([[onset % self.vocab.steps_per_bar]], dtype=torch.long, device=self.start.device)
-        step = self.embed(torch.tensor([[fields]], dtype=torch.long, device=self.start.device), phase)
+            phase = torch.tensor(
+                [[onset % self.vocab.steps_per_bar]],
+                dtype=torch.long,
+                device=self.start.device,
+            )
+        step = self.embed(
+            torch.tensor([[fields]], dtype=torch.long, device=self.start.device), phase
+        )
         _, hidden = self.rnn(step, hidden)
         return hidden, onset
 
@@ -171,7 +194,9 @@ class FactoredEventModel(nn.Module):
         near-greedy so the foundation stays regular while other lanes keep their variety.
         """
         hidden, _ = state
-        fields = self._sample(hidden[-1], temperature, bias, force, regular_pitches, regular_temperature)
+        fields = self._sample(
+            hidden[-1], temperature, bias, force, regular_pitches, regular_temperature
+        )
         return fields, self.observe(state, fields)
 
     # -- generation -----------------------------------------------------------------------------
@@ -231,7 +256,11 @@ class FactoredEventModel(nn.Module):
 
         pitch = pick(0, temperature)
         # A kick/snare keeps the foundation tight: sample its timing (dt=1, dur=2) near-greedy.
-        on_grid = regular_pitches is not None and regular_temperature is not None and pitch in regular_pitches
+        on_grid = (
+            regular_pitches is not None
+            and regular_temperature is not None
+            and pitch in regular_pitches
+        )
         indices = [pitch] + [
             pick(i, regular_temperature if (on_grid and i in (1, 2)) else temperature)
             for i in range(1, len(all_logits))

@@ -26,7 +26,9 @@ def test_velocity_binning_within_one_bin():
 
 
 def test_clamping():
-    codec = EventCodec(VocabConfig(max_dt=32, max_dur=32, velocity_bins=16, num_channels=16))
+    codec = EventCodec(
+        VocabConfig(max_dt=32, max_dur=32, velocity_bins=16, num_channels=16)
+    )
     pitch, dt, dur_idx, vel, channel, source = codec.encode(
         Event(pitch=200, dt=999, dur=999, velocity=300, channel=99, source=5)
     )
@@ -52,7 +54,9 @@ def test_eos_and_sequence_roundtrip():
 
 
 def test_field_sizes():
-    codec = EventCodec(VocabConfig(max_dt=32, max_dur=32, velocity_bins=16, num_channels=16))
+    codec = EventCodec(
+        VocabConfig(max_dt=32, max_dur=32, velocity_bins=16, num_channels=16)
+    )
     assert codec.config.field_sizes == (129, 33, 32, 16, 16, 2)
 
 

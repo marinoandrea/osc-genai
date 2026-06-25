@@ -43,7 +43,9 @@ def _difference(frame: np.ndarray, half: int) -> np.ndarray:
     fft_size = 1
     while fft_size < 2 * half:
         fft_size <<= 1
-    corr = np.fft.irfft(np.fft.rfft(x, fft_size) * np.conj(np.fft.rfft(a, fft_size)), fft_size)
+    corr = np.fft.irfft(
+        np.fft.rfft(x, fft_size) * np.conj(np.fft.rfft(a, fft_size)), fft_size
+    )
     corr = corr[:half]  # r(τ) for τ in [0, half)
 
     diff = energy_first + energy_win - 2.0 * corr
@@ -98,7 +100,9 @@ class Yin:
     weaker periodicity (more sensitive, more octave errors); the reference default is 0.15.
     """
 
-    def __init__(self, sample_rate: int, frame_size: int, threshold: float = DEFAULT_THRESHOLD) -> None:
+    def __init__(
+        self, sample_rate: int, frame_size: int, threshold: float = DEFAULT_THRESHOLD
+    ) -> None:
         if frame_size < 4:
             raise ValueError("frame_size must be >= 4")
         self.sample_rate = int(sample_rate)

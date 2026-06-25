@@ -20,6 +20,7 @@ Usage:
     uv run python scripts/fetch_midm_database.py --out /tmp/midi --force
     uv run python scripts/fetch_midm_database.py --no-originals   # drop full songs
 """
+
 from __future__ import annotations
 
 import argparse
@@ -47,23 +48,80 @@ USER_AGENT = "osc-genai-fetch/1.0 (+midm-database mirror)"
 # (GM program data on this site is unreliable -- every track defaults to Piano --
 # so the human-written track names are the real instrument signal.)
 RULES = [
-    ("Drums", ["drum", "kick", "kck", "kik", "snare", "snr", "hat", "hh", "clsd", "ohh",
-               "clap", "perc", "cymbal", "crash", "ride", "tom", "rim", "machine", "mch",
-               "909", "808", "606", "707"]),
+    (
+        "Drums",
+        [
+            "drum",
+            "kick",
+            "kck",
+            "kik",
+            "snare",
+            "snr",
+            "hat",
+            "hh",
+            "clsd",
+            "ohh",
+            "clap",
+            "perc",
+            "cymbal",
+            "crash",
+            "ride",
+            "tom",
+            "rim",
+            "machine",
+            "mch",
+            "909",
+            "808",
+            "606",
+            "707",
+        ],
+    ),
     ("Bass", ["bass"]),
     ("Organ", ["organ"]),
     ("Bell", ["bell"]),
     ("Pluck", ["pluck"]),
     ("Pipe", ["ocarina", "flute", "pipe"]),
     ("Strings", ["string", "violin", "cello", "viola"]),
-    ("Piano", ["klavier", "piano", "grand", "epiano", "e-piano", "rhodes", "boesendorfer",
-               "steinway", "yamaha", "fl keys", " keys", "keys ", "upper", "lower",
-               "primo", "secundo", " hand"]),
+    (
+        "Piano",
+        [
+            "klavier",
+            "piano",
+            "grand",
+            "epiano",
+            "e-piano",
+            "rhodes",
+            "boesendorfer",
+            "steinway",
+            "yamaha",
+            "fl keys",
+            " keys",
+            "keys ",
+            "upper",
+            "lower",
+            "primo",
+            "secundo",
+            " hand",
+        ],
+    ),
     ("Lead", ["lead", "acid", " ld ", "ld_", "supersaw"]),
     ("Brass", ["brass"]),
     ("Pad", ["pad"]),
-    ("Synth", ["synth", "massive", "sylenth", "poizone", "toxic", "tal-", "poly",
-               "saw ", "square", "es p"]),
+    (
+        "Synth",
+        [
+            "synth",
+            "massive",
+            "sylenth",
+            "poizone",
+            "toxic",
+            "tal-",
+            "poly",
+            "saw ",
+            "square",
+            "es p",
+        ],
+    ),
 ]
 
 
@@ -105,7 +163,7 @@ def crawl() -> dict[str, str]:
             if low.endswith((".mid", ".midi")):
                 mids.setdefault(full, artist)
             elif full.startswith(BASE) and low.endswith(".html"):
-                tail = full[len(BASE):]
+                tail = full[len(BASE) :]
                 if tail not in nav and full not in albums:
                     albums.append(full)
         for album in albums:
@@ -119,7 +177,9 @@ def crawl() -> dict[str, str]:
     return mids
 
 
-def download(mids: dict[str, str], originals_dir: str, force: bool) -> list[tuple[str, str, str]]:
+def download(
+    mids: dict[str, str], originals_dir: str, force: bool
+) -> list[tuple[str, str, str]]:
     """Download each file. Returns ``[(path, artist, source_filename), ...]``."""
     got: list[tuple[str, str, str]] = []
     seen_names: set[str] = set()
@@ -189,7 +249,9 @@ def _write(path: str, ticks: int, metas, events, label: str) -> int:
     return notes
 
 
-def split_song(src_path: str, artist: str, out_root: str, manifest: list, collisions: dict):
+def split_song(
+    src_path: str, artist: str, out_root: str, manifest: list, collisions: dict
+):
     """Split one full song into single-instrument clips under <out>/<Inst>/<Artist>/."""
     stem = os.path.splitext(os.path.basename(src_path))[0]
     mf = MidiFile(src_path)
@@ -200,13 +262,17 @@ def split_song(src_path: str, artist: str, out_root: str, manifest: list, collis
         a = 0
         for msg in tr:
             a += msg.time
-            if msg.is_meta and msg.type in ("set_tempo", "time_signature", "key_signature"):
+            if msg.is_meta and msg.type in (
+                "set_tempo",
+                "time_signature",
+                "key_signature",
+            ):
                 key = (a, msg.type, str(msg.bytes()))
                 if key not in seen_meta:
                     seen_meta.add(key)
                     metas.append((a, msg))
 
-    for ti, tr in enumerate(mf.tracks):
+    for tr in mf.tracks:
         names, a = [], 0
         ev_by_ch = defaultdict(list)
         notes_by_ch = Counter()
@@ -243,25 +309,42 @@ def split_song(src_path: str, artist: str, out_root: str, manifest: list, collis
             os.makedirs(out_dir, exist_ok=True)
             base = f"{stem}__{_safe(label)}"
             key = os.path.join(inst, artist, base)
-            fn = base + ".mid" if not collisions[key] else f"{base}-{collisions[key] + 1}.mid"
+            fn = (
+                base + ".mid"
+                if not collisions[key]
+                else f"{base}-{collisions[key] + 1}.mid"
+            )
             collisions[key] += 1
             out_path = os.path.join(out_dir, fn)
             n = _write(out_path, ticks, metas, ev_by_ch[ch], label)
-            manifest.append({
-                "instrument": inst, "artist": artist,
-                "file": os.path.relpath(out_path, out_root),
-                "source_song": os.path.basename(src_path),
-                "track_label": label, "notes": n,
-            })
+            manifest.append(
+                {
+                    "instrument": inst,
+                    "artist": artist,
+                    "file": os.path.relpath(out_path, out_root),
+                    "source_song": os.path.basename(src_path),
+                    "track_label": label,
+                    "notes": n,
+                }
+            )
 
 
 # --------------------------------------------------------------------------- main
 def main(argv=None) -> int:
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--out", default="data/MIDI", help="output root (default: data/MIDI)")
-    ap.add_argument("--force", action="store_true", help="re-download even if a file exists")
-    ap.add_argument("--no-originals", action="store_true",
-                    help="delete the full-song originals after splitting")
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    ap.add_argument(
+        "--out", default="data/MIDI", help="output root (default: data/MIDI)"
+    )
+    ap.add_argument(
+        "--force", action="store_true", help="re-download even if a file exists"
+    )
+    ap.add_argument(
+        "--no-originals",
+        action="store_true",
+        help="delete the full-song originals after splitting",
+    )
     args = ap.parse_args(argv)
 
     originals = os.path.join(args.out, "_originals")
@@ -283,13 +366,25 @@ def main(argv=None) -> int:
 
     man_path = os.path.join(args.out, "MANIFEST_midm.csv")
     with open(man_path, "w", newline="") as fh:
-        w = csv.DictWriter(fh, fieldnames=["instrument", "artist", "file",
-                                           "source_song", "track_label", "notes"])
+        w = csv.DictWriter(
+            fh,
+            fieldnames=[
+                "instrument",
+                "artist",
+                "file",
+                "source_song",
+                "track_label",
+                "notes",
+            ],
+        )
         w.writeheader()
-        w.writerows(sorted(manifest, key=lambda r: (r["instrument"], r["artist"], r["file"])))
+        w.writerows(
+            sorted(manifest, key=lambda r: (r["instrument"], r["artist"], r["file"]))
+        )
 
     if args.no_originals:
         import shutil
+
         shutil.rmtree(originals, ignore_errors=True)
 
     by_inst = Counter(r["instrument"] for r in manifest)

@@ -26,7 +26,9 @@ def test_pop_due_returns_and_removes_arrived_notes():
 
 def test_reconcile_protects_commit_horizon_and_drops_tail():
     buf = AnticipatoryBuffer(commit_horizon=2.0)
-    buf.add([s(1, dur=1.0), s(3), s(5)])  # playhead 0 -> horizon 2: only onset 1 is committed
+    buf.add(
+        [s(1, dur=1.0), s(3), s(5)]
+    )  # playhead 0 -> horizon 2: only onset 1 is committed
     resume, dropped = buf.reconcile(playhead=0.0)
     assert dropped == 2
     assert [x.onset for x in buf._notes] == [1]

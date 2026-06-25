@@ -16,7 +16,9 @@ from osc_genai.audio.yin import Yin
 class PitchTracker:
     """Accumulate audio blocks; for each full ``frame_size`` window run YIN and feed the segmenter."""
 
-    def __init__(self, yin: Yin, segmenter: NoteSegmenter, *, frame_size: int, hop: int) -> None:
+    def __init__(
+        self, yin: Yin, segmenter: NoteSegmenter, *, frame_size: int, hop: int
+    ) -> None:
         self._yin = yin
         self._seg = segmenter
         self._frame_size = int(frame_size)
@@ -25,7 +27,9 @@ class PitchTracker:
 
     def feed(self, block: np.ndarray) -> None:
         """Append a mono block (float samples) and process every frame it completes."""
-        self._buf = np.concatenate([self._buf, np.asarray(block, dtype=np.float64).ravel()])
+        self._buf = np.concatenate(
+            [self._buf, np.asarray(block, dtype=np.float64).ravel()]
+        )
         while self._buf.shape[0] >= self._frame_size:
             frame = self._buf[: self._frame_size]
             rms = float(np.sqrt(np.mean(frame * frame)))

@@ -23,7 +23,10 @@ def test_stream_recorder_assembles_notes_in_beats():
     rec.message(_on(64, 90), 2.0)
     rec.message(_off(64), 2.25)  # 0.25s = 0.5 beat
     # t0 = 1.0 (origin), bpm 120 -> 0.5 s/beat
-    assert rec.notes(t0=1.0, bpm=120) == [Note(60, 0.0, 1.0, 100), Note(64, 2.0, 0.5, 90)]
+    assert rec.notes(t0=1.0, bpm=120) == [
+        Note(60, 0.0, 1.0, 100),
+        Note(64, 2.0, 0.5, 90),
+    ]
 
 
 def test_unmatched_note_off_is_ignored():
