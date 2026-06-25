@@ -4,6 +4,16 @@ __pycache__/
 *.egg-info/
 .pytest_cache/
 
+# Build artifacts
+/dist/
+build/
+
+# Coverage
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+
 # uv / virtualenv
 .venv/
 

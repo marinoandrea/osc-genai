@@ -1,5 +1,12 @@
 # osc-genai
 
+[![CI](https://github.com/marinoandrea/osc-genai/actions/workflows/ci.yml/badge.svg)](https://github.com/marinoandrea/osc-genai/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/marinoandrea/osc-genai/branch/main/graph/badge.svg)](https://codecov.io/gh/marinoandrea/osc-genai)
+[![Python](https://img.shields.io/badge/python-%3E%3D3.10-blue)](https://www.python.org/downloads/)
+[![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
+[![Checked with ty](https://img.shields.io/badge/type%20checked-ty-261230.svg)](https://github.com/astral-sh/ty)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+
 A from-scratch generative-MIDI system for Ableton Live: a small per-event neural model learns
 from a MIDI corpus, writes clips into Live over OSC, and plays a **real-time anticipatory duet**
 with you over virtual MIDI ports.
@@ -41,11 +48,26 @@ cli.py     the minimal plumbing demo (read track, generate, create clip, add not
 
 AbletonOSC listens on UDP **11000** (commands) and replies on UDP **11001**.
 
-## Setup
+## Install (released version)
+
+Each tagged release attaches a built wheel. With [`uv`](https://docs.astral.sh/uv/getting-started/installation/)
+installed, one command pulls everything (including `torch` and the native `aalink`/MIDI/audio
+deps) and installs the console commands (`duet`, `generate`, `train`, …):
+
+```bash
+uv tool install "osc-genai[link] @ https://github.com/marinoandrea/osc-genai/releases/latest/download/osc_genai-0.1.0-py3-none-any.whl"
+```
+
+Drop `[link]` to skip Ableton Link support. (You still need Ableton Live + AbletonOSC and the
+MIDI/audio routing described below to actually play.) The exact one-liner for each version is
+printed in that release's notes.
+
+## Setup (from source / development)
 
 ```bash
 uv sync                 # core install
 uv sync --extra link    # + Ableton Link support (native aalink build) for the duet's --link
+uv sync --all-extras --dev   # everything + test/lint/type-check tooling
 ```
 
 ### Install AbletonOSC into Ableton Live (required for the clip path)
@@ -222,4 +244,30 @@ when no data is given, and `--bpm` are also available).
 
 ```bash
 uv run pytest
+```
+
+## CI / CD
+
+`.github/workflows/ci.yml` runs on every push to `main` and on PRs: across
+`ubuntu`/`macos` × Python `3.10`/`3.13` it runs `ruff check`, `ruff format --check`,
+`ty check src/`, and `pytest`. Run the same gates locally before pushing:
+
+```bash
+uv sync --all-extras --dev
+uv run ruff check . && uv run ruff format --check . && uv run ty check src/ && uv run pytest
+```
+
+All GitHub Actions are pinned to commit SHAs; Dependabot (`.github/dependabot.yml`) keeps
+both the action pins and the Python deps current.
+
+### Releasing
+
+`.github/workflows/release.yml` builds the wheel + sdist with `uv build` and publishes them
+as GitHub Release assets on a version tag. To cut a release:
+
+```bash
+# 1. bump `version` in pyproject.toml (the workflow fails if the tag doesn't match), commit on main
+# 2. tag and push:
+git tag v0.1.0
+git push origin v0.1.0
 ```
