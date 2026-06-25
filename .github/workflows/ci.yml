@@ -35,11 +35,14 @@ jobs:
           enable-cache: true
           python-version: ${{ matrix.python-version }}
 
-      # PySide6's offscreen platform still dlopen's the GL stack; ubuntu-latest is headless
-      # and ships without libEGL, so the Qt smoke tests error on import without this.
-      - name: Install Qt system libraries (Linux)
+      # Linux system libs the wheels can't provide:
+      #  - libegl1: PySide6's offscreen platform still dlopen's the GL stack, so the Qt
+      #    smoke tests error on import without it.
+      #  - libasound2-dev: python-rtmidi has no cp313 wheel and builds from source on 3.13,
+      #    which needs the ALSA development headers.
+      - name: Install system libraries (Linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libegl1
+        run: sudo apt-get update && sudo apt-get install -y libegl1 libasound2-dev
 
       - name: Install dependencies
         run: uv sync --all-extras --dev

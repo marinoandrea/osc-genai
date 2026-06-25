@@ -27,8 +27,10 @@ def test_builtin_acid_pattern_is_valid():
 
 def test_play_loop_sends_notes_and_cleans_up():
     out = _FakeOut()
-    # very fast tempo + bar of 1 beat, so the anchored loop fires within the bounded run
-    play_loop(out, [Note(60, 0.0, 0.1, 100)], WallClock(6000), quantum=1, seconds=0.05)
+    # Very fast tempo + bar of 1 beat, so the anchored loop fires within the bounded run.
+    # The time budget is generous (not 0.05s): the run is real-time, and a loaded CI runner
+    # can oversleep enough to miss a tight deadline before any note is emitted.
+    play_loop(out, [Note(60, 0.0, 0.1, 100)], WallClock(6000), quantum=1, seconds=0.5)
     types = [m.type for m in out.messages]
     assert "note_on" in types
     # every note that started is also ended (offs flushed live or in cleanup)
