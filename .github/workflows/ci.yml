@@ -66,7 +66,13 @@ jobs:
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@e53489f4d376d79066609109e7a95a29eb3740b1 # v7.0.0
         with:
+          token: ${{ secrets.CODECOV_TOKEN }}
           files: ./coverage.xml
           flags: ${{ matrix.os }}-py${{ matrix.python-version }}
-        # Public repo -> tokenless upload; don't fail CI if the upload hiccups.
+        # Authenticated upload via CODECOV_TOKEN: tokenless is rejected on the default
+        # branch ("Token required because branch is protected"). Don't fail CI on upload
+        # hiccups, and skip when the secret is absent (e.g. fork PRs).
+        if: ${{ env.CODECOV_TOKEN != '' }}
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
         continue-on-error: true
