@@ -21,12 +21,12 @@ How it stays live and adaptive:
 from __future__ import annotations
 
 import argparse
+import contextlib
 import heapq
 import os
 import sys
 import threading
 import time
-from collections.abc import Callable
 
 # python-rtmidi is mido's real-time backend; select it before mido resolves a default.
 os.environ.setdefault("MIDO_BACKEND", "mido.backends.rtmidi")
@@ -37,6 +37,7 @@ from osc_genai.realtime.clock import make_clock  # noqa: E402
 from osc_genai.data.pairs import interleave  # noqa: E402
 from osc_genai.core.event import DEFAULT_STEPS_PER_BEAT  # noqa: E402
 from osc_genai.realtime.scheduler import AnticipatoryBuffer, Scheduled  # noqa: E402
+from osc_genai.realtime.partner import HumanStream, MidiPartnerInput, AudioPartnerInput  # noqa: E402,F401
 from osc_genai.data.snapshot import save_snapshot  # noqa: E402
 from osc_genai.osc.listen import OSCTrigger  # noqa: E402
 from osc_genai.model.checkpoint import load_model  # noqa: E402
@@ -45,45 +46,13 @@ from osc_genai.core.vocab import EventCodec  # noqa: E402
 DEFAULT_IN_PORT = "osc-genai in"
 DEFAULT_OUT_PORT = "osc-genai out"
 
-
-class HumanStream:
-    """Thread-safe record of the human's notes as ``PARTNER`` ``Note``s on the shared beat clock.
-
-    Notes are timestamped at ``note_on`` against a shared origin, so they interleave with the model's
-    line on the same timeline. Duration is provisional (finalised on ``note_off``) — for conditioning
-    the onset/pitch matter most.
-    """
-
-    def __init__(self, beat_now: Callable[[], float], channel: int = 0) -> None:
-        self._beat_now = beat_now  # current position on the shared clock, in beats
-        self._channel = channel
-        self._notes: list[Note] = []  # onset-ordered, start in beats
-        self._active: dict[int, int] = {}  # pitch -> index in _notes awaiting note_off
-        self._lock = threading.Lock()
-        self.note_count = 0
-
-    def on_message(self, msg: "mido.Message") -> None:
-        now_beats = self._beat_now()
-        with self._lock:
-            if msg.type == "note_on" and msg.velocity > 0:
-                self._active[msg.note] = len(self._notes)
-                self._notes.append(Note(msg.note, now_beats, 0.25, msg.velocity, False, self._channel))
-                self.note_count += 1
-            elif msg.type in ("note_off", "note_on"):  # note_on vel 0 is a note_off
-                idx = self._active.pop(msg.note, None)
-                if idx is not None:
-                    n = self._notes[idx]
-                    self._notes[idx] = n._replace(duration=max(0.0625, now_beats - n.start))
-
-    def window(self, since_beats: float) -> tuple[list[Note], int]:
-        """Notes with onset >= ``since_beats`` (a trailing window), plus the running note count."""
-        with self._lock:
-            return [n for n in self._notes if n.start >= since_beats], self.note_count
+# HumanStream is defined in osc_genai.realtime.partner (so the audio input can share it without an
+# import cycle) and re-exported here for backward compatibility.
 
 
 def duet(
     model,
-    inp: "mido.ports.BaseInput",
+    partner,
     out: "mido.ports.BaseOutput",
     clock,
     *,
@@ -96,7 +65,6 @@ def duet(
     pitch_bias: dict[int, float] | None = None,
     human_channel: int = 0,
     out_channel: int | None = 9,
-    echo_channel: int | None = 0,
     regular_pitches: tuple[int, ...] = (36, 38),
     regular_temperature: float = 0.15,
     snap_steps: int = 2,
@@ -114,6 +82,11 @@ def duet(
     """Play an anticipatory duet: fold the human's timed notes into the model's interleaved stream and
     generate the complementary ``SELF`` line ahead, reconciling when the human moves.
 
+    ``partner`` is the partner-note source (see :mod:`osc_genai.realtime.partner`): a
+    ``MidiPartnerInput`` reading a MIDI port, or an ``AudioPartnerInput`` capturing a real instrument
+    and pitch-tracking it. It feeds the shared ``HumanStream`` via ``partner.start(human, send, stop)``
+    — the duet loop is agnostic to which one it is.
+
     ``clock`` is the shared beat clock (see :mod:`osc_genai.realtime.clock`): a ``WallClock`` for free-running
     local timing, or a ``LinkClock`` to ride Ableton Live's grid/tempo and start/stop with its
     transport. The playhead is read as ``clock.beat * steps_per_beat`` so generated onsets land on the
@@ -121,9 +94,7 @@ def duet(
 
     ``out_channel`` pins every played note to one MIDI channel (default 9, the GM drum lane) so a
     single Ableton track sees a steady stream; pass ``None`` to keep the model's predicted channel.
-    ``echo_channel`` re-sends the human's incoming notes out the *same* port on that channel (default
-    0), so the bass you hear shares the duet's clock with the drums — without it, a separately-clocked
-    bass source drifts in phase and sounds syncopated. Pass ``None`` to disable the echo.
+    (Echoing the human's notes back out the port is handled by the partner input.)
 
     ``regular_pitches`` (default kick=36/snare=38) are the foundation lanes kept *deliberately
     regular*: their timing is sampled at ``regular_temperature`` (near-greedy, so they don't wander)
@@ -145,22 +116,14 @@ def duet(
     start = time.perf_counter()  # wall-clock origin, used only for the ``seconds`` time limit
     human = HumanStream(lambda: clock.beat, channel=human_channel)
     stop = threading.Event()
-    out_lock = threading.Lock()  # the pump thread (echo) and firing loop both write ``out``
+    out_lock = threading.Lock()  # the partner input (echo) and firing loop both write ``out``
     gen_lock = threading.Lock()  # the generation thread and firing loop share buffer/committed_self
 
     def send(msg: "mido.Message") -> None:
         with out_lock:
             out.send(msg)
 
-    def pump() -> None:
-        for msg in inp:  # blocking; ends when the port closes
-            human.on_message(msg)
-            if echo_channel is not None and msg.type in ("note_on", "note_off"):
-                send(msg.copy(channel=echo_channel))  # let the player hear the bass on the duet's clock
-            if stop.is_set():
-                break
-
-    threading.Thread(target=pump, daemon=True).start()
+    partner.start(human, send, stop)  # MIDI pump or audio capture+YIN feeds ``human``
 
     buffer = AnticipatoryBuffer(commit_horizon=commit_horizon)
     committed_self: list[Note] = []  # SELF notes already played, re-fed as history (start in beats)
@@ -336,6 +299,7 @@ def duet(
             time.sleep(0.0007)
     finally:
         stop.set()
+        partner.stop()
         if osc_trigger is not None:
             osc_trigger.close()
         release_all()
@@ -382,6 +346,19 @@ def main() -> None:
     parser.add_argument("--window-beats", type=float, default=16.0, help="trailing history fed back as context")
     parser.add_argument("--out-channel", type=int, default=9, help="pin drums to this MIDI channel (-1 = model's own)")
     parser.add_argument("--echo-channel", type=int, default=0, help="echo the human's bass out on this channel so it shares the duet clock (-1 = off)")
+    # Audio ingestion: play a real (non-MIDI) instrument instead of a MIDI controller. MONOPHONIC
+    # only — YIN tracks one fundamental per frame, so a bass chord collapses to its lowest/strongest
+    # note. Audio is captured from a virtual loopback device (see 'uv run audio-devices').
+    parser.add_argument("--audio-in", action="store_true", help="capture a real instrument as audio and pitch-track it (monophonic, instead of MIDI in)")
+    parser.add_argument("--audio-device", default="BlackHole 2ch", help="capture device name (a loopback) for --audio-in")
+    parser.add_argument("--audio-samplerate", type=int, default=44100, help="audio capture sample rate")
+    parser.add_argument("--audio-blocksize", type=int, default=1024, help="audio capture block size")
+    parser.add_argument("--frame-size", type=int, default=4096, help="YIN analysis window in samples (4096 covers a bass's low E ~41Hz; smaller = lower latency but higher pitch floor)")
+    parser.add_argument("--hop", type=int, default=512, help="YIN frame advance in samples")
+    parser.add_argument("--yin-threshold", type=float, default=0.15, help="YIN aperiodicity threshold")
+    parser.add_argument("--confidence", type=float, default=0.5, help="min YIN probability to voice a note")
+    parser.add_argument("--noise-floor", type=float, default=0.01, help="min RMS to voice a note (gate silence)")
+    parser.add_argument("--audio-echo", action="store_true", help="with --audio-in, echo the tracked notes out the duet port for monitoring")
     parser.add_argument("--pitch-bias", default=None, help='per-pitch logit bias, e.g. "47:-3,48:-3,38:1"')
     parser.add_argument("--regular-pitches", default="36,38", help="foundation lanes kept regular (default kick,snare)")
     parser.add_argument("--regular-temperature", type=float, default=0.15, help="near-greedy timing temp for the foundation")
@@ -401,7 +378,25 @@ def main() -> None:
     model = load_model(args.checkpoint)
     clock = make_clock(args.link, bpm=args.bpm, quantum=args.quantum, start_stop_sync=args.start_stop_sync)
     tempo = "Ableton Link" if args.link else f"{args.bpm} BPM"
-    with _open_input(args.in_port) as inp, _open_output(args.out_port) as out:
+    with contextlib.ExitStack() as stack:
+        out = stack.enter_context(_open_output(args.out_port))
+        if args.audio_in:
+            partner = AudioPartnerInput(
+                device=args.audio_device,
+                samplerate=args.audio_samplerate,
+                blocksize=args.audio_blocksize,
+                frame_size=args.frame_size,
+                hop=args.hop,
+                yin_threshold=args.yin_threshold,
+                confidence=args.confidence,
+                noise_floor=args.noise_floor,
+                echo_channel=args.echo_channel if (args.audio_echo and args.echo_channel >= 0) else None,
+            )
+            source = f"AUDIO on {args.audio_device!r} (YIN pitch tracking, monophonic)"
+        else:
+            inp = stack.enter_context(_open_input(args.in_port))
+            partner = MidiPartnerInput(inp, echo_channel=None if args.echo_channel < 0 else args.echo_channel)
+            source = f"MIDI on {args.in_port!r}"
         snap = "off" if args.no_snapshots else (
             f"press {args.snapshot_key!r}+Enter"
             + (f" or send OSC {args.snapshot_osc_addr} on UDP {args.snapshot_osc_port}"
@@ -409,13 +404,13 @@ def main() -> None:
             + f" to save the last {args.snapshot_bars} bars to {args.snapshot_dir}"
         )
         print(
-            f"duet: listening to YOU on {args.in_port!r}, responding on {args.out_port!r} "
+            f"duet: listening to YOU via {source}, responding on {args.out_port!r} "
             f"({tempo}). Play something. Snapshots: {snap}. Ctrl-C to stop."
         )
         try:
             duet(
                 model,
-                inp,
+                partner,
                 out,
                 clock,
                 steps_per_beat=args.steps_per_beat,
@@ -426,7 +421,6 @@ def main() -> None:
                 window_beats=args.window_beats,
                 pitch_bias=_parse_pitch_bias(args.pitch_bias),
                 out_channel=None if args.out_channel < 0 else args.out_channel,
-                echo_channel=None if args.echo_channel < 0 else args.echo_channel,
                 regular_pitches=tuple(int(p) for p in args.regular_pitches.split(",") if p.strip()),
                 regular_temperature=args.regular_temperature,
                 snap_steps=args.snap_steps,

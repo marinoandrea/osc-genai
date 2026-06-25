@@ -33,7 +33,8 @@ model/     factored per-event GRU + per-field heads, streaming sample API, check
 data/      MIDI I/O, augmentation, drums normalize, aligned instrument pairs, record, snapshot
 training/  teacher-forced training loops (solo / conditional / paired) + metrics
 inference.py   model -> Note phrases, generate-into-Live CLI
-realtime/  clock (WallClock / Ableton-Link), play, duet, scheduler, fake-human, live (M1)
+realtime/  clock (WallClock / Ableton-Link), play, duet, scheduler, fake-human, live (M1), partner inputs
+audio/     YIN pitch tracker + note segmentation + device capture (real instrument -> notes, monophonic)
 osc/       AbletonOSC client (send/query clips) + OSC trigger listener
 cli.py     the minimal plumbing demo (read track, generate, create clip, add notes)
 ```
@@ -161,6 +162,44 @@ uv run duet --checkpoint models/bass2drums.pt --snapshot-bars 4
 ```
 
 Snapshot length should match your training chunk size (`--snapshot-bars`, default 4).
+
+### Audio ingestion — play a real (non-MIDI) instrument
+
+Instead of a MIDI controller, the duet partner can be a **real instrument captured as audio**: a
+bass goes into a virtual loopback device, we run our own **YIN** pitch tracker on it on the fly
+(`audio/yin.py`), segment the pitch into notes, and feed those into the *same* duet — so generation
+and snapshot-to-dataset work unchanged.
+
+> **Monophonic only.** YIN estimates one fundamental per frame, so this tracks a single-note line.
+> If the bass plays a **chord**, only its strongest/lowest note is captured.
+
+The Live API exposes no PCM, so we don't query Ableton for samples — we tap the track's output at
+signal level. One-time setup (macOS):
+
+```bash
+brew install blackhole-2ch     # a virtual loopback audio device (or use Loopback / an Aggregate Device)
+sudo killall coreaudiod        # reload CoreAudio so the device appears
+uv run audio-devices           # verify it's present (defaults to "BlackHole 2ch")
+```
+
+In Ableton, route the bass track's **Audio To → BlackHole 2ch** (an *Aggregate Device* combining
+your interface + BlackHole lets you keep monitoring). Then calibrate the tracker on its own —
+no model needed — until single notes read out correctly:
+
+```bash
+uv run audio-track --device "BlackHole 2ch"      # prints detected notes live
+uv run audio-track --device "BlackHole 2ch" --save take.mid   # also dump to MIDI
+# tune: --frame-size (4096 covers a bass low E; smaller = lower latency, higher pitch floor),
+#       --confidence, --noise-floor, --yin-threshold, --hop
+```
+
+Then run the duet straight off the audio:
+
+```bash
+uv run duet --checkpoint models/bass2drums.pt --audio-in --link
+# --audio-device, --audio-samplerate, --frame-size, --hop, --confidence, --noise-floor,
+# --yin-threshold, --audio-echo (monitor the tracked MIDI). Snapshot flags work as usual.
+```
 
 ### Record a full session
 

@@ -12,6 +12,7 @@ dependencies = [
     "numpy>=2.2.6",
     "python-osc>=1.10.2",
     "python-rtmidi>=1.5.8",
+    "sounddevice>=0.4.6",
     "torch>=2.12.1",
 ]
 
@@ -32,6 +33,8 @@ play = "osc_genai.realtime.play:main"
 duet = "osc_genai.realtime.duet:main"
 fake-human = "osc_genai.realtime.fake_human:main"
 record = "osc_genai.data.record:main"
+audio-devices = "osc_genai.audio.capture:main"
+audio-track = "osc_genai.audio.track:main"
 
 [build-system]
 requires = ["uv_build>=0.8.15,<0.9.0"]
