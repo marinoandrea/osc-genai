@@ -23,6 +23,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import heapq
+import math
 import os
 import sys
 import threading
@@ -129,6 +130,7 @@ def duet(
     committed_self: list[Note] = []  # SELF notes already played, re-fed as history (start in beats)
     pending_off: list[tuple[float, int, int]] = []  # min-heap of (off_step, pitch, channel)
     was_playing = False
+    entry_beat: list[float | None] = [None]  # beat the model enters on after a (re)start; pinned to the next whole bar
 
     def release_all() -> None:
         """Silence everything currently sounding (model notes + a belt-and-braces all-notes-off)."""
@@ -197,7 +199,8 @@ def duet(
                 channel = out_channel if out_channel is not None else event.channel
                 scheduled.append(Scheduled(float(onset), event.pitch, event.velocity, float(event.dur), channel))
         with gen_lock:
-            buffer.add(scheduled)
+            if clock.playing:  # transport may have stopped during model compute — drop a stale plan
+                buffer.add(scheduled)
         return len(scheduled)
 
     def gen_loop() -> None:
@@ -207,7 +210,10 @@ def duet(
             if not clock.playing:
                 time.sleep(0.01)
                 continue
-            playhead = clock.beat * steps_per_beat
+            # Anchor priming at the bar the firing loop will start on, so the lookahead buffer is
+            # already filled when the downbeat arrives (no ramp-in gap).
+            entry = entry_beat[0] or 0.0
+            playhead = max(clock.beat, entry) * steps_per_beat
             _, fingerprint = human.window(0.0)
             if fingerprint != last_fingerprint:  # the human played something new
                 last_fingerprint = fingerprint
@@ -276,9 +282,24 @@ def duet(
                         buffer.clear()
                         committed_self.clear()
                     was_playing = False
+                    entry_beat[0] = None
+                    print(
+                        f"transport -> stop @ beat {clock.beat:.2f} "
+                        f"phase {clock.beat % beats_per_bar:.2f} peers {clock.peers}"
+                    )
                 time.sleep(0.01)
                 continue
-            was_playing = True
+            if not was_playing:  # just resumed: come in on the next whole-bar downbeat
+                was_playing = True
+                entry_beat[0] = math.ceil(clock.beat / beats_per_bar) * beats_per_bar
+                print(
+                    f"transport -> play @ beat {clock.beat:.2f} "
+                    f"phase {clock.beat % beats_per_bar:.2f} peers {clock.peers} "
+                    f"-> enter at beat {entry_beat[0]:.2f}"
+                )
+            if entry_beat[0] is not None and clock.beat < entry_beat[0]:
+                time.sleep(0.001)  # wait silently for the entry downbeat
+                continue
             playhead = clock.beat * steps_per_beat  # position on the shared grid, in steps
 
             while pending_off and pending_off[0][0] <= playhead:  # release finished notes
