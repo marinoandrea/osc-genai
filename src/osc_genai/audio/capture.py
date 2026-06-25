@@ -10,10 +10,11 @@ PortAudio present.
 
 from __future__ import annotations
 
-import argparse
 from collections.abc import Callable
 
 import numpy as np
+
+from osc_genai.cli_spec import REGISTRY, build_parser
 
 DEFAULT_DEVICE = "BlackHole 2ch"
 DEFAULT_SAMPLERATE = 44100
@@ -35,7 +36,11 @@ def _sd():
 def list_input_devices() -> list[dict]:
     """Every device with at least one input channel (each dict carries name/channels/samplerate)."""
     sd = _sd()
-    return [dict(d, index=i) for i, d in enumerate(sd.query_devices()) if d["max_input_channels"] > 0]
+    return [
+        dict(d, index=i)
+        for i, d in enumerate(sd.query_devices())
+        if d["max_input_channels"] > 0
+    ]
 
 
 def find_device(name: str) -> dict | None:
@@ -72,7 +77,7 @@ class AudioCapture:
         self._blocksize = int(blocksize)
         self._stream = None
 
-    def start(self) -> "AudioCapture":
+    def start(self) -> AudioCapture:
         sd = _sd()
         resolved = find_device(self._device)
         if resolved is None:
@@ -104,20 +109,24 @@ class AudioCapture:
 
 def main() -> None:
     """``audio-devices``: list input devices and verify the chosen capture device is present."""
-    parser = argparse.ArgumentParser(description="List audio input devices and verify capture setup.")
-    parser.add_argument("--device", default=DEFAULT_DEVICE, help="device name to verify is present")
-    args = parser.parse_args()
+    args = build_parser(REGISTRY["audio-devices"]).parse_args()
 
     print("Audio input devices:")
     for d in list_input_devices():
-        print(f"  [{d['index']:>2}] {d['name']}  ({d['max_input_channels']} ch, "
-              f"{int(d['default_samplerate'])} Hz)")
+        print(
+            f"  [{d['index']:>2}] {d['name']}  ({d['max_input_channels']} ch, "
+            f"{int(d['default_samplerate'])} Hz)"
+        )
     found = find_device(args.device)
     if found is None:
-        print(f"\n'{args.device}' is NOT available. Install a loopback device (e.g. "
-              "'brew install blackhole-2ch') and route the bass track to it in Ableton.")
+        print(
+            f"\n'{args.device}' is NOT available. Install a loopback device (e.g. "
+            "'brew install blackhole-2ch') and route the bass track to it in Ableton."
+        )
         raise SystemExit(1)
-    print(f"\nOK: capture device {found['name']!r} is available (index {found['index']}).")
+    print(
+        f"\nOK: capture device {found['name']!r} is available (index {found['index']})."
+    )
 
 
 if __name__ == "__main__":

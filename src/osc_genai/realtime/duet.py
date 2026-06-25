@@ -20,7 +20,6 @@ How it stays live and adaptive:
 
 from __future__ import annotations
 
-import argparse
 import contextlib
 import heapq
 import math
@@ -33,16 +32,21 @@ import time
 os.environ.setdefault("MIDO_BACKEND", "mido.backends.rtmidi")
 import mido  # noqa: E402
 
-from osc_genai.core.note import Note  # noqa: E402
-from osc_genai.realtime.clock import make_clock  # noqa: E402
-from osc_genai.data.pairs import interleave  # noqa: E402
+from osc_genai.cli_spec import REGISTRY, build_parser  # noqa: E402
 from osc_genai.core.event import DEFAULT_STEPS_PER_BEAT  # noqa: E402
-from osc_genai.realtime.scheduler import AnticipatoryBuffer, Scheduled  # noqa: E402
-from osc_genai.realtime.partner import HumanStream, MidiPartnerInput, AudioPartnerInput  # noqa: E402,F401
-from osc_genai.data.snapshot import save_snapshot  # noqa: E402
-from osc_genai.osc.listen import OSCTrigger  # noqa: E402
-from osc_genai.model.checkpoint import load_model  # noqa: E402
+from osc_genai.core.note import Note  # noqa: E402
 from osc_genai.core.vocab import EventCodec  # noqa: E402
+from osc_genai.data.pairs import interleave  # noqa: E402
+from osc_genai.data.snapshot import save_snapshot  # noqa: E402
+from osc_genai.model.checkpoint import load_model  # noqa: E402
+from osc_genai.osc.listen import OSCTrigger  # noqa: E402
+from osc_genai.realtime.clock import make_clock  # noqa: E402
+from osc_genai.realtime.partner import (  # noqa: E402,F401
+    AudioPartnerInput,
+    HumanStream,
+    MidiPartnerInput,
+)
+from osc_genai.realtime.scheduler import AnticipatoryBuffer, Scheduled  # noqa: E402
 
 DEFAULT_IN_PORT = "osc-genai in"
 DEFAULT_OUT_PORT = "osc-genai out"
@@ -54,7 +58,7 @@ DEFAULT_OUT_PORT = "osc-genai out"
 def duet(
     model,
     partner,
-    out: "mido.ports.BaseOutput",
+    out: mido.ports.BaseOutput,
     clock,
     *,
     steps_per_beat: int = DEFAULT_STEPS_PER_BEAT,
@@ -79,6 +83,7 @@ def duet(
     snapshot_key: str = "s",
     snapshot_osc_port: int | None = None,
     snapshot_osc_addr: str = "/snapshot",
+    stop: threading.Event | None = None,
 ) -> None:
     """Play an anticipatory duet: fold the human's timed notes into the model's interleaved stream and
     generate the complementary ``SELF`` line ahead, reconciling when the human moves.
@@ -114,23 +119,37 @@ def duet(
             tensor[pitch] += value
         bias = {0: tensor}
 
-    start = time.perf_counter()  # wall-clock origin, used only for the ``seconds`` time limit
+    start = (
+        time.perf_counter()
+    )  # wall-clock origin, used only for the ``seconds`` time limit
     human = HumanStream(lambda: clock.beat, channel=human_channel)
-    stop = threading.Event()
-    out_lock = threading.Lock()  # the partner input (echo) and firing loop both write ``out``
-    gen_lock = threading.Lock()  # the generation thread and firing loop share buffer/committed_self
+    # A caller (e.g. the control center) may inject its own stop Event to end the duet without
+    # Ctrl-C; otherwise we own one. The firing loop and gen_loop both watch it (see ``expired``).
+    stop = stop if stop is not None else threading.Event()
+    out_lock = (
+        threading.Lock()
+    )  # the partner input (echo) and firing loop both write ``out``
+    gen_lock = (
+        threading.Lock()
+    )  # the generation thread and firing loop share buffer/committed_self
 
-    def send(msg: "mido.Message") -> None:
+    def send(msg: mido.Message) -> None:
         with out_lock:
             out.send(msg)
 
     partner.start(human, send, stop)  # MIDI pump or audio capture+YIN feeds ``human``
 
     buffer = AnticipatoryBuffer(commit_horizon=commit_horizon)
-    committed_self: list[Note] = []  # SELF notes already played, re-fed as history (start in beats)
-    pending_off: list[tuple[float, int, int]] = []  # min-heap of (off_step, pitch, channel)
+    committed_self: list[
+        Note
+    ] = []  # SELF notes already played, re-fed as history (start in beats)
+    pending_off: list[
+        tuple[float, int, int]
+    ] = []  # min-heap of (off_step, pitch, channel)
     was_playing = False
-    entry_beat: list[float | None] = [None]  # beat the model enters on after a (re)start; pinned to the next whole bar
+    entry_beat: list[float | None] = [
+        None
+    ]  # beat the model enters on after a (re)start; pinned to the next whole bar
 
     def release_all() -> None:
         """Silence everything currently sounding (model notes + a belt-and-braces all-notes-off)."""
@@ -150,8 +169,18 @@ def duet(
         with gen_lock:
             mine = [n for n in committed_self if n.start >= since]
             upcoming = buffer.upcoming()
-        mine += [Note(s.pitch, s.onset / steps_per_beat, s.dur / steps_per_beat, s.velocity, False, s.channel)
-                 for s in upcoming if s.onset / steps_per_beat >= since]
+        mine += [
+            Note(
+                s.pitch,
+                s.onset / steps_per_beat,
+                s.dur / steps_per_beat,
+                s.velocity,
+                False,
+                s.channel,
+            )
+            for s in upcoming
+            if s.onset / steps_per_beat >= since
+        ]
         taken = {round(s.onset) for s in upcoming if s.pitch in regular}
         return partner, mine, taken
 
@@ -177,29 +206,52 @@ def duet(
         partner, mine, taken = snapshot(playhead)
         state = prime(partner, mine, playhead)  # model compute — no lock held
         scheduled: list[Scheduled] = []
-        for _ in range(max(chunk_events, 4 * int(lookahead_steps) + 8)):  # one prime fills the lookahead
+        for _ in range(
+            max(chunk_events, 4 * int(lookahead_steps) + 8)
+        ):  # one prime fills the lookahead
             fields, state = model.sample_next(
-                state, temperature, bias=bias,
-                regular_pitches=regular, regular_temperature=regular_temperature,
+                state,
+                temperature,
+                bias=bias,
+                regular_pitches=regular,
+                regular_temperature=regular_temperature,
             )
             if fields[0] == model.vocab.eos_pitch:
                 break
-            onset = state[1]  # absolute grid step of the just-sampled event (phase-consistent)
+            onset = state[
+                1
+            ]  # absolute grid step of the just-sampled event (phase-consistent)
             if onset > playhead + lookahead_steps:
                 break
-            if onset <= playhead:  # already past (frontier behind the playhead); skip, keep rolling
+            if (
+                onset <= playhead
+            ):  # already past (frontier behind the playhead); skip, keep rolling
                 continue
             if fields[source_field] != 0:  # SELF (0 == PARTNER) — play it
                 event = codec.decode(fields)
-                if snap_steps and event.pitch in regular:  # force the foundation onto a clean grid
+                if (
+                    snap_steps and event.pitch in regular
+                ):  # force the foundation onto a clean grid
                     onset = round(onset / snap_steps) * snap_steps
-                    if onset <= playhead or onset in taken:  # don't double-hit a snapped step
+                    if (
+                        onset <= playhead or onset in taken
+                    ):  # don't double-hit a snapped step
                         continue
                     taken.add(onset)
                 channel = out_channel if out_channel is not None else event.channel
-                scheduled.append(Scheduled(float(onset), event.pitch, event.velocity, float(event.dur), channel))
+                scheduled.append(
+                    Scheduled(
+                        float(onset),
+                        event.pitch,
+                        event.velocity,
+                        float(event.dur),
+                        channel,
+                    )
+                )
         with gen_lock:
-            if clock.playing:  # transport may have stopped during model compute — drop a stale plan
+            if (
+                clock.playing
+            ):  # transport may have stopped during model compute — drop a stale plan
                 buffer.add(scheduled)
         return len(scheduled)
 
@@ -228,6 +280,8 @@ def duet(
             time.sleep(0.004)
 
     def expired() -> bool:
+        if stop.is_set():
+            return True
         return seconds is not None and (time.perf_counter() - start) >= seconds
 
     # Snapshot: on a keypress or an OSC bang, grab the last N bars of both parts and save them as
@@ -247,17 +301,25 @@ def duet(
         with snapshot_lock:
             song_id = f"{stamp}-{snapshot_count[0]:03d}"
             result = save_snapshot(
-                human_notes, machine_notes, snapshot_root,
-                end_beat=end_beat, bars=snapshot_bars, beats_per_bar=beats_per_bar,
-                human_inst=snapshot_human_inst, machine_inst=snapshot_machine_inst,
-                artist=snapshot_artist, song_id=song_id,
+                human_notes,
+                machine_notes,
+                snapshot_root,
+                end_beat=end_beat,
+                bars=snapshot_bars,
+                beats_per_bar=beats_per_bar,
+                human_inst=snapshot_human_inst,
+                machine_inst=snapshot_machine_inst,
+                artist=snapshot_artist,
+                song_id=song_id,
             )
             if result is None:
                 print(f"snapshot: not enough played yet (need {snapshot_bars} bars).")
                 return
             snapshot_count[0] += 1
         human_path, machine_path = result
-        print(f"snapshot: saved last {snapshot_bars} bars -> {human_path} + {machine_path}")
+        print(
+            f"snapshot: saved last {snapshot_bars} bars -> {human_path} + {machine_path}"
+        )
 
     def snapshot_loop() -> None:
         for line in sys.stdin:  # blocking; ends when stdin closes
@@ -269,13 +331,19 @@ def duet(
     if snapshot_root is not None:
         threading.Thread(target=snapshot_loop, daemon=True).start()
         if snapshot_osc_port is not None and snapshot_osc_port > 0:
-            osc_trigger = OSCTrigger({snapshot_osc_addr: do_snapshot}, port=snapshot_osc_port).start()
+            osc_trigger = OSCTrigger(
+                {snapshot_osc_addr: do_snapshot}, port=snapshot_osc_port
+            ).start()
 
     threading.Thread(target=gen_loop, daemon=True).start()
 
     try:
-        while not expired():  # tight firing loop — only cheap MIDI I/O, never blocked by the model
-            if not clock.playing:  # transport stopped: silence and drop the plan until it resumes
+        while (
+            not expired()
+        ):  # tight firing loop — only cheap MIDI I/O, never blocked by the model
+            if (
+                not clock.playing
+            ):  # transport stopped: silence and drop the plan until it resumes
                 if was_playing:
                     with gen_lock:
                         release_all()
@@ -300,21 +368,40 @@ def duet(
             if entry_beat[0] is not None and clock.beat < entry_beat[0]:
                 time.sleep(0.001)  # wait silently for the entry downbeat
                 continue
-            playhead = clock.beat * steps_per_beat  # position on the shared grid, in steps
+            playhead = (
+                clock.beat * steps_per_beat
+            )  # position on the shared grid, in steps
 
-            while pending_off and pending_off[0][0] <= playhead:  # release finished notes
+            while (
+                pending_off and pending_off[0][0] <= playhead
+            ):  # release finished notes
                 _, pitch, ch = heapq.heappop(pending_off)
                 send(mido.Message("note_off", note=pitch, velocity=0, channel=ch))
 
             with gen_lock:
                 due = buffer.pop_due(playhead)
             for sched in due:  # fire notes whose moment has arrived
-                send(mido.Message("note_on", note=sched.pitch, velocity=sched.velocity, channel=sched.channel))
-                heapq.heappush(pending_off, (sched.onset + sched.dur, sched.pitch, sched.channel))
+                send(
+                    mido.Message(
+                        "note_on",
+                        note=sched.pitch,
+                        velocity=sched.velocity,
+                        channel=sched.channel,
+                    )
+                )
+                heapq.heappush(
+                    pending_off, (sched.onset + sched.dur, sched.pitch, sched.channel)
+                )
                 with gen_lock:
                     committed_self.append(  # this SELF note is now history for future conditioning
-                        Note(sched.pitch, sched.onset / steps_per_beat, sched.dur / steps_per_beat,
-                             sched.velocity, False, sched.channel)
+                        Note(
+                            sched.pitch,
+                            sched.onset / steps_per_beat,
+                            sched.dur / steps_per_beat,
+                            sched.velocity,
+                            False,
+                            sched.channel,
+                        )
                     )
 
             time.sleep(0.0007)
@@ -348,59 +435,15 @@ def _parse_pitch_bias(text: str | None) -> dict[int, float] | None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Real-time anticipatory duet (model plays with you).")
-    parser.add_argument("--checkpoint", required=True, help="trained duet model (.pt)")
-    parser.add_argument("--in-port", default=DEFAULT_IN_PORT, help="port you play into")
-    parser.add_argument("--out-port", default=DEFAULT_OUT_PORT, help="port the model plays out")
-    parser.add_argument("--bpm", type=float, default=130.0, help="tempo; with --link this is only the fallback/seed")
-    parser.add_argument("--link", action="store_true", help="ride Ableton Link's grid/tempo/transport")
-    parser.add_argument("--quantum", type=int, default=4, help="Link bar length in beats (phase alignment)")
-    parser.add_argument(
-        "--start-stop-sync", action=argparse.BooleanOptionalAction, default=True,
-        help="with --link, only play while Ableton's transport runs",
-    )
-    parser.add_argument("--steps-per-beat", type=int, default=DEFAULT_STEPS_PER_BEAT)
-    parser.add_argument("--temperature", type=float, default=0.95)
-    parser.add_argument("--chunk-events", type=int, default=8, help="events generated per chunk")
-    parser.add_argument("--lookahead", type=float, default=8.0, help="grid steps kept generated ahead")
-    parser.add_argument("--commit-horizon", type=float, default=2.0, help="steps ahead locked from revision")
-    parser.add_argument("--window-beats", type=float, default=16.0, help="trailing history fed back as context")
-    parser.add_argument("--out-channel", type=int, default=9, help="pin drums to this MIDI channel (-1 = model's own)")
-    parser.add_argument("--echo-channel", type=int, default=0, help="echo the human's bass out on this channel so it shares the duet clock (-1 = off)")
-    # Audio ingestion: play a real (non-MIDI) instrument instead of a MIDI controller. MONOPHONIC
-    # only — YIN tracks one fundamental per frame, so a bass chord collapses to its lowest/strongest
-    # note. Audio is captured from a virtual loopback device (see 'uv run audio-devices').
-    parser.add_argument("--audio-in", action="store_true", help="capture a real instrument as audio and pitch-track it (monophonic, instead of MIDI in)")
-    parser.add_argument("--audio-device", default="BlackHole 2ch", help="capture device name (a loopback) for --audio-in")
-    parser.add_argument("--audio-samplerate", type=int, default=44100, help="audio capture sample rate")
-    parser.add_argument("--audio-blocksize", type=int, default=1024, help="audio capture block size")
-    parser.add_argument("--frame-size", type=int, default=4096, help="YIN analysis window in samples (4096 covers a bass's low E ~41Hz; smaller = lower latency but higher pitch floor)")
-    parser.add_argument("--hop", type=int, default=512, help="YIN frame advance in samples")
-    parser.add_argument("--yin-threshold", type=float, default=0.15, help="YIN aperiodicity threshold")
-    parser.add_argument("--confidence", type=float, default=0.5, help="min YIN probability to voice a note")
-    parser.add_argument("--noise-floor", type=float, default=0.01, help="min RMS to voice a note (gate silence)")
-    parser.add_argument("--audio-echo", action="store_true", help="with --audio-in, echo the tracked notes out the duet port for monitoring")
-    parser.add_argument("--pitch-bias", default=None, help='per-pitch logit bias, e.g. "47:-3,48:-3,38:1"')
-    parser.add_argument("--regular-pitches", default="36,38", help="foundation lanes kept regular (default kick,snare)")
-    parser.add_argument("--regular-temperature", type=float, default=0.15, help="near-greedy timing temp for the foundation")
-    parser.add_argument("--snap-steps", type=int, default=2, help="snap foundation onsets to this grid (2=8th, 4=1/4, 0=off)")
-    parser.add_argument("--seconds", type=float, default=None, help="stop after N seconds")
-    parser.add_argument(
-        "--device", default="cpu", help="cpu | cuda | mps | auto (realtime defaults to cpu)"
-    )
-    parser.add_argument("--snapshot-dir", default="data/MIDI", help="dataset root snapshots are saved into")
-    parser.add_argument("--no-snapshots", action="store_true", help="disable the keypress snapshot trigger")
-    parser.add_argument("--snapshot-bars", type=int, default=4, help="bars per snapshot (match the training chunk size)")
-    parser.add_argument("--snapshot-human-inst", default="Bass", help="instrument folder for your part")
-    parser.add_argument("--snapshot-machine-inst", default="Drums", help="instrument folder for the model's part")
-    parser.add_argument("--snapshot-artist", default="personal", help="artist folder snapshots land under")
-    parser.add_argument("--snapshot-key", default="s", help="key to press (then Enter) to save a snapshot")
-    parser.add_argument("--snapshot-osc-port", type=int, default=11002, help="UDP port to listen on for an OSC snapshot trigger (<=0 = off)")
-    parser.add_argument("--snapshot-osc-addr", default="/snapshot", help="OSC address that triggers a snapshot")
-    args = parser.parse_args()
+    args = build_parser(REGISTRY["duet"]).parse_args()
 
     model = load_model(args.checkpoint, device=args.device)
-    clock = make_clock(args.link, bpm=args.bpm, quantum=args.quantum, start_stop_sync=args.start_stop_sync)
+    clock = make_clock(
+        args.link,
+        bpm=args.bpm,
+        quantum=args.quantum,
+        start_stop_sync=args.start_stop_sync,
+    )
     tempo = "Ableton Link" if args.link else f"{args.bpm} BPM"
     with contextlib.ExitStack() as stack:
         out = stack.enter_context(_open_output(args.out_port))
@@ -414,18 +457,29 @@ def main() -> None:
                 yin_threshold=args.yin_threshold,
                 confidence=args.confidence,
                 noise_floor=args.noise_floor,
-                echo_channel=args.echo_channel if (args.audio_echo and args.echo_channel >= 0) else None,
+                echo_channel=args.echo_channel
+                if (args.audio_echo and args.echo_channel >= 0)
+                else None,
             )
             source = f"AUDIO on {args.audio_device!r} (YIN pitch tracking, monophonic)"
         else:
             inp = stack.enter_context(_open_input(args.in_port))
-            partner = MidiPartnerInput(inp, echo_channel=None if args.echo_channel < 0 else args.echo_channel)
+            partner = MidiPartnerInput(
+                inp, echo_channel=None if args.echo_channel < 0 else args.echo_channel
+            )
             source = f"MIDI on {args.in_port!r}"
-        snap = "off" if args.no_snapshots else (
-            f"press {args.snapshot_key!r}+Enter"
-            + (f" or send OSC {args.snapshot_osc_addr} on UDP {args.snapshot_osc_port}"
-               if args.snapshot_osc_port > 0 else "")
-            + f" to save the last {args.snapshot_bars} bars to {args.snapshot_dir}"
+        snap = (
+            "off"
+            if args.no_snapshots
+            else (
+                f"press {args.snapshot_key!r}+Enter"
+                + (
+                    f" or send OSC {args.snapshot_osc_addr} on UDP {args.snapshot_osc_port}"
+                    if args.snapshot_osc_port > 0
+                    else ""
+                )
+                + f" to save the last {args.snapshot_bars} bars to {args.snapshot_dir}"
+            )
         )
         print(
             f"duet: listening to YOU via {source}, responding on {args.out_port!r} "
@@ -445,7 +499,9 @@ def main() -> None:
                 window_beats=args.window_beats,
                 pitch_bias=_parse_pitch_bias(args.pitch_bias),
                 out_channel=None if args.out_channel < 0 else args.out_channel,
-                regular_pitches=tuple(int(p) for p in args.regular_pitches.split(",") if p.strip()),
+                regular_pitches=tuple(
+                    int(p) for p in args.regular_pitches.split(",") if p.strip()
+                ),
                 regular_temperature=args.regular_temperature,
                 snap_steps=args.snap_steps,
                 seconds=args.seconds,

@@ -20,22 +20,23 @@ Pairs can be fed straight to training (dynamic, no duplication) or written out w
 
 from __future__ import annotations
 
-import argparse
 import csv
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
 
 import mido
 
-from osc_genai.data.midi import load_midi_file, save_notes_midi, transpose
-from osc_genai.core.note import Note
+from osc_genai.cli_spec import REGISTRY, build_parser
 from osc_genai.core.event import DEFAULT_STEPS_PER_BEAT, PARTNER, SELF, Event, _quantize
+from osc_genai.core.note import Note
+from osc_genai.data.midi import load_midi_file, save_notes_midi, transpose
 
 DRUM_CHANNEL = 9
 
 
 # -- grouping ---------------------------------------------------------------------------------
+
 
 @dataclass
 class SongStem:
@@ -79,6 +80,7 @@ def bar_beats(path: str | Path) -> float:
 
 # -- windowing --------------------------------------------------------------------------------
 
+
 def _slice(notes: list[Note], w0: float, w1: float) -> list[Note]:
     """Notes whose onset falls in ``[w0, w1)``, shifted so the window starts at 0."""
     return [n._replace(start=n.start - w0) for n in notes if w0 <= n.start < w1]
@@ -108,7 +110,9 @@ def window_pairs(
     while w0 <= end:
         ctx_chunk = _slice(context, w0, w0 + win)
         tgt_chunk = _slice(target, w0, w0 + win)
-        empty = (require_both and (not ctx_chunk or not tgt_chunk)) or (not ctx_chunk and not tgt_chunk)
+        empty = (require_both and (not ctx_chunk or not tgt_chunk)) or (
+            not ctx_chunk and not tgt_chunk
+        )
         if not empty:
             out.append((ctx_chunk, tgt_chunk, int(round(w0 / bpb))))
         w0 += hop
@@ -116,6 +120,7 @@ def window_pairs(
 
 
 # -- pair building ----------------------------------------------------------------------------
+
 
 @dataclass
 class AlignedPair:
@@ -167,7 +172,9 @@ def build_aligned_pairs(
             for ctx_chunk, tgt_chunk, bar in window_pairs(
                 ctx_stem.notes, tgt_notes, bpb, size, hop_bars, require_both
             ):
-                pairs.append(AlignedPair(ctx_chunk, tgt_chunk, song, ctx_stem.artist, bar, size))
+                pairs.append(
+                    AlignedPair(ctx_chunk, tgt_chunk, song, ctx_stem.artist, bar, size)
+                )
     return pairs
 
 
@@ -196,8 +203,11 @@ def augment_pairs(
 
 # -- interleaving (paired -> single source-tagged stream) -------------------------------------
 
+
 def interleave(
-    context: list[Note], target: list[Note], steps_per_beat: int = DEFAULT_STEPS_PER_BEAT
+    context: list[Note],
+    target: list[Note],
+    steps_per_beat: int = DEFAULT_STEPS_PER_BEAT,
 ) -> list[Event]:
     """Merge an aligned ``(context, target)`` pair into one source-tagged event stream.
 
@@ -209,7 +219,9 @@ def interleave(
     """
     tagged = [(n, PARTNER) for n in context if not n.mute]
     tagged += [(n, SELF) for n in target if not n.mute]
-    tagged.sort(key=lambda ns: (ns[0].start, ns[1], ns[0].pitch))  # PARTNER(0) before SELF(1)
+    tagged.sort(
+        key=lambda ns: (ns[0].start, ns[1], ns[0].pitch)
+    )  # PARTNER(0) before SELF(1)
     events: list[Event] = []
     prev_onset = 0
     for note, source in tagged:
@@ -229,7 +241,8 @@ def interleave(
 
 
 def interleave_pairs(
-    pairs: list[tuple[list[Note], list[Note]]], steps_per_beat: int = DEFAULT_STEPS_PER_BEAT
+    pairs: list[tuple[list[Note], list[Note]]],
+    steps_per_beat: int = DEFAULT_STEPS_PER_BEAT,
 ) -> list[list[Event]]:
     """Interleave every ``(context, target)`` pair into one source-tagged event sequence each."""
     return [interleave(ctx, tgt, steps_per_beat) for ctx, tgt in pairs]
@@ -237,7 +250,9 @@ def interleave_pairs(
 
 # -- materialization (optional, for inspection) -----------------------------------------------
 
-_save_notes_midi = save_notes_midi  # writer promoted to data.midi; kept as an alias for callers here
+_save_notes_midi = (
+    save_notes_midi  # writer promoted to data.midi; kept as an alias for callers here
+)
 
 
 def materialize(
@@ -260,44 +275,54 @@ def materialize(
         combined = sorted(ctx + tgt, key=lambda n: (n.start, n.pitch))
         name = f"{pair.song}_{pair.bars}bar_{pair.bar:03d}.mid"
         _save_notes_midi(combined, dest / name)
-        rows.append([f"{ctx_inst}_to_{tgt_inst}", pair.artist, name, pair.song, pair.bars,
-                     pair.bar, len(pair.context), len(pair.target)])
+        rows.append(
+            [
+                f"{ctx_inst}_to_{tgt_inst}",
+                pair.artist,
+                name,
+                pair.song,
+                pair.bars,
+                pair.bar,
+                len(pair.context),
+                len(pair.target),
+            ]
+        )
     root.mkdir(parents=True, exist_ok=True)
     with open(root / "pairs.csv", "w", newline="") as fh:
         writer = csv.writer(fh)
-        writer.writerow(["pair", "artist", "file", "song", "bars", "bar", "ctx_notes", "tgt_notes"])
+        writer.writerow(
+            ["pair", "artist", "file", "song", "bars", "bar", "ctx_notes", "tgt_notes"]
+        )
         writer.writerows(rows)
     return root
 
 
 # -- CLI: inspect "how much data" -------------------------------------------------------------
 
+
 def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Build same-song, time-aligned instrument-pair chunks; print stats / materialize."
-    )
-    parser.add_argument("--data-dir", default="data/MIDI")
-    parser.add_argument("--context-inst", default="Bass")
-    parser.add_argument("--target-inst", default="Drums")
-    parser.add_argument("--chunk-bars", type=int, default=4)
-    parser.add_argument("--also-8", action="store_true", help="also emit 8-bar chunks")
-    parser.add_argument("--hop-bars", type=int, default=None, help="window hop (default = chunk size)")
-    parser.add_argument("--no-require-both", action="store_true", help="keep windows with one stem empty")
-    parser.add_argument("--no-normalize-drums", action="store_true")
-    parser.add_argument("--materialize", default=None, help="write a <Ctx>_to_<Tgt>/ tree here")
-    args = parser.parse_args()
+    args = build_parser(REGISTRY["build-pairs"]).parse_args()
 
     sizes = [args.chunk_bars] + ([8] if args.also_8 and args.chunk_bars != 8 else [])
     pairs = build_aligned_pairs(
-        args.data_dir, args.context_inst, args.target_inst,
-        chunk_bars=args.chunk_bars, hop_bars=args.hop_bars, sizes=sizes,
-        normalize_drums=not args.no_normalize_drums, require_both=not args.no_require_both,
+        args.data_dir,
+        args.context_inst,
+        args.target_inst,
+        chunk_bars=args.chunk_bars,
+        hop_bars=args.hop_bars,
+        sizes=sizes,
+        normalize_drums=not args.no_normalize_drums,
+        require_both=not args.no_require_both,
     )
     by_song: dict[str, int] = {}
     for pair in pairs:
-        by_song[f"{pair.artist} / {pair.song}"] = by_song.get(f"{pair.artist} / {pair.song}", 0) + 1
-    print(f"{args.context_inst} -> {args.target_inst}: {len(by_song)} songs, {len(pairs)} chunks "
-          f"(sizes={sizes} bars)")
+        by_song[f"{pair.artist} / {pair.song}"] = (
+            by_song.get(f"{pair.artist} / {pair.song}", 0) + 1
+        )
+    print(
+        f"{args.context_inst} -> {args.target_inst}: {len(by_song)} songs, {len(pairs)} chunks "
+        f"(sizes={sizes} bars)"
+    )
     for song, n in sorted(by_song.items()):
         print(f"  {n:4d}  {song}")
     if args.materialize:

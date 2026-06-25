@@ -12,7 +12,6 @@ Then route ``osc-genai out`` to a synth in Ableton to hear the model's response.
 
 from __future__ import annotations
 
-import argparse
 import heapq
 import math
 import os
@@ -23,8 +22,9 @@ import time
 os.environ.setdefault("MIDO_BACKEND", "mido.backends.rtmidi")
 import mido  # noqa: E402
 
-from osc_genai.data.midi import load_midi_dir, load_midi_file  # noqa: E402
+from osc_genai.cli_spec import REGISTRY, build_parser  # noqa: E402
 from osc_genai.core.note import Note  # noqa: E402
+from osc_genai.data.midi import load_midi_dir, load_midi_file  # noqa: E402
 from osc_genai.realtime.clock import make_clock  # noqa: E402
 
 DEFAULT_TARGET = "osc-genai in"
@@ -32,10 +32,22 @@ DEFAULT_TARGET = "osc-genai in"
 # A built-in one-bar acid loop (16th notes; root E2 with octave/interval jumps) used when no
 # data folder or file is given.
 _ACID = [
-    Note(40, 0.00, 0.25, 110), Note(52, 0.25, 0.25, 90), Note(40, 0.50, 0.25, 110), Note(43, 0.75, 0.25, 90),
-    Note(40, 1.00, 0.25, 110), Note(52, 1.25, 0.25, 90), Note(45, 1.50, 0.25, 100), Note(40, 1.75, 0.25, 110),
-    Note(40, 2.00, 0.25, 110), Note(55, 2.25, 0.25, 90), Note(40, 2.50, 0.25, 110), Note(43, 2.75, 0.25, 90),
-    Note(40, 3.00, 0.25, 110), Note(52, 3.25, 0.25, 90), Note(48, 3.50, 0.25, 100), Note(40, 3.75, 0.25, 110),
+    Note(40, 0.00, 0.25, 110),
+    Note(52, 0.25, 0.25, 90),
+    Note(40, 0.50, 0.25, 110),
+    Note(43, 0.75, 0.25, 90),
+    Note(40, 1.00, 0.25, 110),
+    Note(52, 1.25, 0.25, 90),
+    Note(45, 1.50, 0.25, 100),
+    Note(40, 1.75, 0.25, 110),
+    Note(40, 2.00, 0.25, 110),
+    Note(55, 2.25, 0.25, 90),
+    Note(40, 2.50, 0.25, 110),
+    Note(43, 2.75, 0.25, 90),
+    Note(40, 3.00, 0.25, 110),
+    Note(52, 3.25, 0.25, 90),
+    Note(48, 3.50, 0.25, 100),
+    Note(40, 3.75, 0.25, 110),
 ]
 
 
@@ -45,8 +57,15 @@ def loop_length_beats(notes: list[Note]) -> float:
     return max(1.0, float(math.ceil(end)))
 
 
-def play_loop(out, notes: list[Note], clock, *, channel: int = 0, quantum: int = 4,
-              seconds: float | None = None) -> None:
+def play_loop(
+    out,
+    notes: list[Note],
+    clock,
+    *,
+    channel: int = 0,
+    quantum: int = 4,
+    seconds: float | None = None,
+) -> None:
     """Loop ``notes`` out ``out`` on ``clock``'s grid until ``seconds`` elapses (or forever).
 
     ``clock`` (see :mod:`osc_genai.realtime.clock`) supplies the beat position. Each loop pass is anchored to a
@@ -58,9 +77,13 @@ def play_loop(out, notes: list[Note], clock, *, channel: int = 0, quantum: int =
     if not notes:
         return
     length = loop_length_beats(notes)
-    start = time.perf_counter()  # wall-clock origin, used only for the ``seconds`` time limit
+    start = (
+        time.perf_counter()
+    )  # wall-clock origin, used only for the ``seconds`` time limit
     pending_off: list[tuple[float, int]] = []  # min-heap of (off_beat, pitch)
-    anchor: float | None = None  # downbeat (in beats) where the current loop pass begins
+    anchor: float | None = (
+        None  # downbeat (in beats) where the current loop pass begins
+    )
 
     def flush(beat: float) -> None:
         while pending_off and pending_off[0][0] <= beat:
@@ -84,7 +107,9 @@ def play_loop(out, notes: list[Note], clock, *, channel: int = 0, quantum: int =
                     if expired():
                         stop = True
                         break
-                    if not clock.playing:  # transport stopped: silence, restart from next downbeat
+                    if (
+                        not clock.playing
+                    ):  # transport stopped: silence, restart from next downbeat
                         silence()
                         anchor = None
                         restart = True
@@ -101,11 +126,23 @@ def play_loop(out, notes: list[Note], clock, *, channel: int = 0, quantum: int =
                     wake = (target - beat) * sec_per_beat
                     if pending_off:
                         wake = min(wake, (pending_off[0][0] - beat) * sec_per_beat)
-                    time.sleep(max(0.0, min(wake, 0.02)))  # cap so we notice stop/tempo changes
+                    time.sleep(
+                        max(0.0, min(wake, 0.02))
+                    )  # cap so we notice stop/tempo changes
                 if stop or restart:
                     break
-                out.send(mido.Message("note_on", note=note.pitch, velocity=note.velocity, channel=channel))
-                heapq.heappush(pending_off, (anchor + base + note.start + note.duration, note.pitch))
+                out.send(
+                    mido.Message(
+                        "note_on",
+                        note=note.pitch,
+                        velocity=note.velocity,
+                        channel=channel,
+                    )
+                )
+                heapq.heappush(
+                    pending_off,
+                    (anchor + base + note.start + note.duration, note.pitch),
+                )
             if restart:
                 base = 0.0  # next pass re-anchors at the resumed transport's downbeat
                 continue
@@ -115,21 +152,7 @@ def play_loop(out, notes: list[Note], clock, *, channel: int = 0, quantum: int =
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Loop a MIDI line into the duet's input port.")
-    parser.add_argument("--to-port", default=DEFAULT_TARGET, help="port to send into (the duet's input)")
-    parser.add_argument("--from-data", default=None, help="folder of .mid files; loops one clip")
-    parser.add_argument("--midi", default=None, help="a single .mid file to loop")
-    parser.add_argument("--bpm", type=float, default=130.0, help="tempo; with --link this is only the fallback/seed")
-    parser.add_argument("--link", action="store_true", help="ride Ableton Link's grid/tempo/transport")
-    parser.add_argument("--quantum", type=int, default=4, help="Link bar length in beats (phase alignment)")
-    parser.add_argument(
-        "--start-stop-sync", action=argparse.BooleanOptionalAction, default=True,
-        help="with --link, only loop while Ableton's transport runs",
-    )
-    parser.add_argument("--seconds", type=float, default=None, help="stop after N seconds")
-    parser.add_argument("--seed", type=int, default=0, help="which clip to pick from --from-data")
-    parser.add_argument("--virtual", action="store_true", help="create the port instead of connecting")
-    args = parser.parse_args()
+    args = build_parser(REGISTRY["fake-human"]).parse_args()
 
     if args.midi:
         notes = load_midi_file(args.midi)
@@ -146,10 +169,17 @@ def main() -> None:
             "(uv run duet ...), or pass --virtual to create the port."
         )
 
-    clock = make_clock(args.link, bpm=args.bpm, quantum=args.quantum, start_stop_sync=args.start_stop_sync)
+    clock = make_clock(
+        args.link,
+        bpm=args.bpm,
+        quantum=args.quantum,
+        start_stop_sync=args.start_stop_sync,
+    )
     tempo = "Ableton Link" if args.link else f"{args.bpm} BPM"
     with mido.open_output(args.to_port, virtual=args.virtual) as out:
-        print(f"fake human: looping {len(notes)} notes into {args.to_port!r} ({tempo}). Ctrl-C to stop.")
+        print(
+            f"fake human: looping {len(notes)} notes into {args.to_port!r} ({tempo}). Ctrl-C to stop."
+        )
         try:
             play_loop(out, notes, clock, quantum=args.quantum, seconds=args.seconds)
         except KeyboardInterrupt:

@@ -2,22 +2,28 @@
 
 from __future__ import annotations
 
-import argparse
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
 import torch
 from torch import nn
 
+from osc_genai.cli_spec import REGISTRY, build_parser
 from osc_genai.core.device import resolve_device
-from osc_genai.data.midi import augment, cross_pairs, load_midi_dir
-from osc_genai.model.factored import FactoredEventModel, ModelConfig
-from osc_genai.model.checkpoint import load_model, save_model  # re-exported for callers/tests
-from osc_genai.core.event import DEFAULT_STEPS_PER_BEAT, Event, notes_to_events
+from osc_genai.core.event import Event, notes_to_events
 from osc_genai.core.vocab import EventCodec, Fields, VocabConfig
+from osc_genai.data.midi import augment, cross_pairs, load_midi_dir
+from osc_genai.model.checkpoint import (
+    load_model as load_model,  # noqa: F401  (re-exported for callers/tests)
+)
+from osc_genai.model.checkpoint import save_model
+from osc_genai.model.factored import FactoredEventModel, ModelConfig
 
 
-def collate(sequences: list[list[Fields]], eos: Fields) -> tuple[torch.Tensor, torch.Tensor]:
+def collate(
+    sequences: list[list[Fields]], eos: Fields
+) -> tuple[torch.Tensor, torch.Tensor]:
     """Pad EOS-terminated encoded sequences into a batch.
 
     Returns ``targets`` ``(B, L, 4)`` long and ``mask`` ``(B, L)`` bool (True for real positions,
@@ -67,15 +73,23 @@ def train(
     codec: EventCodec | None = None,
     config: TrainConfig | None = None,
     log_every: int = 50,
+    on_epoch: Callable[[int, float], None] | None = None,
+    should_stop: Callable[[], bool] | None = None,
 ) -> list[float]:
-    """Teacher-forced next-event training; returns the per-epoch mean loss history."""
+    """Teacher-forced next-event training; returns the per-epoch mean loss history.
+
+    ``on_epoch(epoch, loss)`` is called after each epoch and ``should_stop()`` is polled before each
+    one (both optional) so a UI can plot live progress and abort cooperatively mid-run.
+    """
     codec = codec or EventCodec(model.vocab)
     config = config or TrainConfig()
     device = resolve_device(config.device)
     model.to(device)
     model.train()
 
-    encoded = [codec.encode_sequence(seq, add_eos=True) for seq in event_sequences if seq]
+    encoded = [
+        codec.encode_sequence(seq, add_eos=True) for seq in event_sequences if seq
+    ]
     if not encoded:
         raise ValueError("no (non-empty) training sequences")
     pitch_weights = (
@@ -87,6 +101,8 @@ def train(
 
     history: list[float] = []
     for epoch in range(config.epochs):
+        if should_stop is not None and should_stop():
+            break
         order = torch.randperm(len(encoded)).tolist()
         epoch_loss, batches = 0.0, 0
         for start in range(0, len(order), config.batch_size):
@@ -101,6 +117,8 @@ def train(
             epoch_loss += loss.item()
             batches += 1
         history.append(epoch_loss / max(1, batches))
+        if on_epoch is not None:
+            on_epoch(epoch, history[-1])
         if log_every and (epoch % log_every == 0 or epoch == config.epochs - 1):
             print(f"epoch {epoch:4d}  loss {history[-1]:.4f}")
     return history
@@ -125,6 +143,8 @@ def train_conditional(
     codec: EventCodec | None = None,
     config: TrainConfig | None = None,
     log_every: int = 50,
+    on_epoch: Callable[[int, float], None] | None = None,
+    should_stop: Callable[[], bool] | None = None,
 ) -> list[float]:
     """Train the model to generate the *machine* part given the *human* part.
 
@@ -144,14 +164,24 @@ def train_conditional(
         machine_fields = codec.encode_sequence(machine, add_eos=True)
         if machine_fields:
             encoded.append(
-                (human_fields + machine_fields, [False] * len(human_fields) + [True] * len(machine_fields))
+                (
+                    human_fields + machine_fields,
+                    [False] * len(human_fields) + [True] * len(machine_fields),
+                )
             )
     if not encoded:
         raise ValueError("no (non-empty) training pairs")
 
     pitch_weights = (
         pitch_class_weights(
-            [[fields for fields, is_target in zip(tgt, reg) if is_target] for tgt, reg in encoded],
+            [
+                [
+                    fields
+                    for fields, is_target in zip(tgt, reg, strict=True)
+                    if is_target
+                ]
+                for tgt, reg in encoded
+            ],
             model.vocab.pitch_vocab,
             device,
         )
@@ -161,6 +191,8 @@ def train_conditional(
     optimizer = torch.optim.Adam(model.parameters(), lr=config.lr)
     history: list[float] = []
     for epoch in range(config.epochs):
+        if should_stop is not None and should_stop():
+            break
         order = torch.randperm(len(encoded)).tolist()
         epoch_loss, batches = 0.0, 0
         for start in range(0, len(order), config.batch_size):
@@ -175,43 +207,42 @@ def train_conditional(
             epoch_loss += loss.item()
             batches += 1
         history.append(epoch_loss / max(1, batches))
+        if on_epoch is not None:
+            on_epoch(epoch, history[-1])
         if log_every and (epoch % log_every == 0 or epoch == config.epochs - 1):
             print(f"epoch {epoch:4d}  loss {history[-1]:.4f}")
     return history
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Train the factored event model on a MIDI corpus.")
-    parser.add_argument("--data-dir", required=True, help=".mid folder (searched recursively)")
-    parser.add_argument("--out", default="model.pt", help="checkpoint output path")
-    parser.add_argument("--epochs", type=int, default=40)
-    parser.add_argument("--batch-size", type=int, default=32)
-    parser.add_argument("--lr", type=float, default=1e-3)
-    parser.add_argument(
-        "--transpose", type=int, default=5, help="augment by +/- this many semitones (0 disables)"
-    )
-    parser.add_argument("--steps-per-beat", type=int, default=DEFAULT_STEPS_PER_BEAT)
-    parser.add_argument("--hidden", type=int, default=256)
-    parser.add_argument("--layers", type=int, default=1)
-    parser.add_argument("--device", default="auto", help="cpu | cuda | mps | auto")
-    parser.add_argument("--balance-pitch", action="store_true", help="up-weight rare pitches in loss")
-    args = parser.parse_args()
+    args = build_parser(REGISTRY["train"]).parse_args()
 
     sequences = [s for s in load_midi_dir(args.data_dir) if s]
     print(f"loaded {len(sequences)} non-empty sequence(s) from {args.data_dir}")
     if args.transpose:
-        sequences = augment(sequences, semitones=range(-args.transpose, args.transpose + 1))
-        print(f"after +/-{args.transpose} semitone transposition: {len(sequences)} sequence(s)")
+        sequences = augment(
+            sequences, semitones=range(-args.transpose, args.transpose + 1)
+        )
+        print(
+            f"after +/-{args.transpose} semitone transposition: {len(sequences)} sequence(s)"
+        )
 
-    event_sequences = [notes_to_events(s, steps_per_beat=args.steps_per_beat) for s in sequences]
+    event_sequences = [
+        notes_to_events(s, steps_per_beat=args.steps_per_beat) for s in sequences
+    ]
     vocab = VocabConfig()
-    model = FactoredEventModel(vocab, ModelConfig(hidden_size=args.hidden, num_layers=args.layers))
+    model = FactoredEventModel(
+        vocab, ModelConfig(hidden_size=args.hidden, num_layers=args.layers)
+    )
     train(
         model,
         event_sequences,
         codec=EventCodec(vocab),
         config=TrainConfig(
-            epochs=args.epochs, batch_size=args.batch_size, lr=args.lr, device=args.device,
+            epochs=args.epochs,
+            batch_size=args.batch_size,
+            lr=args.lr,
+            device=args.device,
             balance_pitch=args.balance_pitch,
         ),
         log_every=1,
@@ -221,22 +252,7 @@ def main() -> None:
 
 
 def conditional_main() -> None:
-    parser = argparse.ArgumentParser(description="Train a directional context->target snapshot.")
-    parser.add_argument("--context-dir", nargs="+", required=True, help=".mid folder(s) for context role")
-    parser.add_argument("--target-dir", nargs="+", required=True, help=".mid folder(s) for response role")
-    parser.add_argument("--out", default="model.pt")
-    parser.add_argument("--pairs-per-context", type=int, default=4)
-    parser.add_argument("--epochs", type=int, default=30)
-    parser.add_argument("--batch-size", type=int, default=32)
-    parser.add_argument("--lr", type=float, default=1e-3)
-    parser.add_argument("--hidden", type=int, default=256)
-    parser.add_argument("--layers", type=int, default=1)
-    parser.add_argument("--steps-per-beat", type=int, default=DEFAULT_STEPS_PER_BEAT)
-    parser.add_argument("--device", default="auto", help="cpu | cuda | mps | auto")
-    parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--balance-pitch", action="store_true", help="up-weight rare pitches (kick/snare) in loss")
-    parser.add_argument("--target-drums", action="store_true", help="targets are drums: keep full kits, normalize to GM")
-    args = parser.parse_args()
+    args = build_parser(REGISTRY["train-conditional"]).parse_args()
 
     context = [s for d in args.context_dir for s in load_midi_dir(d) if s]
     if args.target_drums:
@@ -246,7 +262,9 @@ def conditional_main() -> None:
     else:
         target = [s for d in args.target_dir for s in load_midi_dir(d) if s]
     print(f"context: {len(context)} clips from {args.context_dir}")
-    print(f"target:  {len(target)} clips ({'drum kits, GM-normalized' if args.target_drums else 'raw'})")
+    print(
+        f"target:  {len(target)} clips ({'drum kits, GM-normalized' if args.target_drums else 'raw'})"
+    )
     note_pairs = cross_pairs(context, target, k=args.pairs_per_context, seed=args.seed)
     event_pairs = [
         (
@@ -257,13 +275,18 @@ def conditional_main() -> None:
     ]
     print(f"training pairs: {len(event_pairs)}")
     vocab = VocabConfig()
-    model = FactoredEventModel(vocab, ModelConfig(hidden_size=args.hidden, num_layers=args.layers))
+    model = FactoredEventModel(
+        vocab, ModelConfig(hidden_size=args.hidden, num_layers=args.layers)
+    )
     train_conditional(
         model,
         event_pairs,
         codec=EventCodec(vocab),
         config=TrainConfig(
-            epochs=args.epochs, batch_size=args.batch_size, lr=args.lr, device=args.device,
+            epochs=args.epochs,
+            batch_size=args.batch_size,
+            lr=args.lr,
+            device=args.device,
             balance_pitch=args.balance_pitch,
         ),
         log_every=1,
@@ -273,65 +296,54 @@ def conditional_main() -> None:
 
 
 def paired_main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Train a directional model on same-song, time-aligned instrument pairs."
-    )
-    parser.add_argument("--data-dir", default="data/MIDI", help="<Instrument>/<Artist>/ clip store")
-    parser.add_argument("--context-inst", default="Bass")
-    parser.add_argument("--target-inst", default="Drums")
-    parser.add_argument("--chunk-bars", type=int, default=4)
-    parser.add_argument("--also-8", action="store_true", help="also emit 8-bar chunks")
-    parser.add_argument("--hop-bars", type=int, default=None, help="window hop (default = chunk size)")
-    parser.add_argument("--no-normalize-drums", action="store_true")
-    parser.add_argument("--regular-drums", action="store_true",
-                        help="snap kick/snare onsets to a coarse grid so they train regular (hats stay free)")
-    parser.add_argument("--regular-grid", type=float, default=0.5,
-                        help="grid in beats for --regular-drums (0.5 = 8th notes, 1.0 = quarters)")
-    parser.add_argument("--phase", action="store_true",
-                        help="feed bar-relative grid position as an input feature (anchors kick/snare to the grid)")
-    parser.add_argument("--beats-per-bar", type=int, default=4, help="bar length for the --phase feature")
-    parser.add_argument("--out", default="models/bass2drums.pt")
-    parser.add_argument("--transpose", type=int, default=5, help="augment context by +/- semitones (0 disables)")
-    parser.add_argument("--epochs", type=int, default=200)
-    parser.add_argument("--batch-size", type=int, default=32)
-    parser.add_argument("--lr", type=float, default=1e-3)
-    parser.add_argument("--hidden", type=int, default=256)
-    parser.add_argument("--layers", type=int, default=1)
-    parser.add_argument("--steps-per-beat", type=int, default=DEFAULT_STEPS_PER_BEAT)
-    parser.add_argument("--device", default="auto", help="cpu | cuda | mps | auto")
-    parser.add_argument("--balance-pitch", action="store_true", help="up-weight rare pitches (kick/snare)")
-    parser.add_argument(
-        "--interleaved", action=argparse.BooleanOptionalAction, default=True,
-        help="interleave both lines on a shared clock with a source tag (the live-duet model); "
-             "--no-interleaved falls back to legacy prefix conditioning (call-and-response)",
-    )
-    args = parser.parse_args()
+    args = build_parser(REGISTRY["train-paired"]).parse_args()
 
-    from osc_genai.data.pairs import augment_pairs, build_aligned_pairs, interleave_pairs, note_pairs
+    from osc_genai.data.pairs import (
+        augment_pairs,
+        build_aligned_pairs,
+        interleave_pairs,
+        note_pairs,
+    )
 
     sizes = [args.chunk_bars] + ([8] if args.also_8 and args.chunk_bars != 8 else [])
     aligned = build_aligned_pairs(
-        args.data_dir, args.context_inst, args.target_inst,
-        chunk_bars=args.chunk_bars, hop_bars=args.hop_bars, sizes=sizes,
+        args.data_dir,
+        args.context_inst,
+        args.target_inst,
+        chunk_bars=args.chunk_bars,
+        hop_bars=args.hop_bars,
+        sizes=sizes,
         normalize_drums=not args.no_normalize_drums,
         regularize=args.regular_grid if args.regular_drums else None,
     )
     songs = {p.song for p in aligned}
-    print(f"{args.context_inst} -> {args.target_inst}: {len(aligned)} aligned chunks "
-          f"from {len(songs)} songs (sizes={sizes} bars)")
+    print(
+        f"{args.context_inst} -> {args.target_inst}: {len(aligned)} aligned chunks "
+        f"from {len(songs)} songs (sizes={sizes} bars)"
+    )
 
     pairs = note_pairs(aligned)
     if args.transpose:
         pairs = augment_pairs(
-            pairs, semitones=range(-args.transpose, args.transpose + 1),
+            pairs,
+            semitones=range(-args.transpose, args.transpose + 1),
             target_is_drums=args.target_inst.lower() == "drums",
         )
-        print(f"after +/-{args.transpose} semitone context transposition: {len(pairs)} pairs")
+        print(
+            f"after +/-{args.transpose} semitone context transposition: {len(pairs)} pairs"
+        )
 
-    vocab = VocabConfig(use_phase=args.phase, steps_per_bar=args.beats_per_bar * args.steps_per_beat)
-    model = FactoredEventModel(vocab, ModelConfig(hidden_size=args.hidden, num_layers=args.layers))
+    vocab = VocabConfig(
+        use_phase=args.phase, steps_per_bar=args.beats_per_bar * args.steps_per_beat
+    )
+    model = FactoredEventModel(
+        vocab, ModelConfig(hidden_size=args.hidden, num_layers=args.layers)
+    )
     config = TrainConfig(
-        epochs=args.epochs, batch_size=args.batch_size, lr=args.lr, device=args.device,
+        epochs=args.epochs,
+        batch_size=args.batch_size,
+        lr=args.lr,
+        device=args.device,
         balance_pitch=args.balance_pitch,
     )
     codec = EventCodec(vocab)

@@ -7,7 +7,6 @@ machine)`` pairs to train a *complementary* / anticipatory model on, instead of 
 
 from __future__ import annotations
 
-import argparse
 import json
 import os
 import threading
@@ -17,6 +16,7 @@ from pathlib import Path
 os.environ.setdefault("MIDO_BACKEND", "mido.backends.rtmidi")
 import mido  # noqa: E402
 
+from osc_genai.cli_spec import REGISTRY, build_parser  # noqa: E402
 from osc_genai.core.note import Note  # noqa: E402
 
 
@@ -24,10 +24,14 @@ class StreamRecorder:
     """Assemble timestamped note on/off (seconds) into Notes; finalise to beats on a shared clock."""
 
     def __init__(self) -> None:
-        self._active: dict[int, tuple[float, int]] = {}  # pitch -> (start_sec, velocity)
-        self._raw: list[tuple[int, float, float, int]] = []  # (pitch, start_sec, dur_sec, velocity)
+        self._active: dict[
+            int, tuple[float, int]
+        ] = {}  # pitch -> (start_sec, velocity)
+        self._raw: list[
+            tuple[int, float, float, int]
+        ] = []  # (pitch, start_sec, dur_sec, velocity)
 
-    def message(self, msg: "mido.Message", now: float) -> None:
+    def message(self, msg: mido.Message, now: float) -> None:
         if msg.type == "note_on" and msg.velocity > 0:
             self._active[msg.note] = (now, msg.velocity)
         elif msg.type == "note_off" or (msg.type == "note_on" and msg.velocity == 0):
@@ -47,8 +51,8 @@ class StreamRecorder:
 
 
 def record_session(
-    human_in: "mido.ports.BaseInput",
-    machine_in: "mido.ports.BaseInput",
+    human_in: mido.ports.BaseInput,
+    machine_in: mido.ports.BaseInput,
     *,
     bpm: float = 130.0,
     seconds: float | None = None,
@@ -78,33 +82,42 @@ def record_session(
     return human.notes(t0, bpm), machine.notes(t0, bpm)
 
 
-def save_session(human: list[Note], machine: list[Note], bpm: float, path: str | Path) -> None:
+def save_session(
+    human: list[Note], machine: list[Note], bpm: float, path: str | Path
+) -> None:
     """Persist a paired session as JSON: ``{bpm, human: [...], machine: [...]}``."""
-    data = {"bpm": bpm, "human": [list(n) for n in human], "machine": [list(n) for n in machine]}
+    data = {
+        "bpm": bpm,
+        "human": [list(n) for n in human],
+        "machine": [list(n) for n in machine],
+    }
     Path(path).write_text(json.dumps(data))
 
 
 def load_session(path: str | Path) -> tuple[float, list[Note], list[Note]]:
     """Inverse of :func:`save_session`; returns ``(bpm, human, machine)``."""
     data = json.loads(Path(path).read_text())
-    return data["bpm"], [Note(*n) for n in data["human"]], [Note(*n) for n in data["machine"]]
+    return (
+        data["bpm"],
+        [Note(*n) for n in data["human"]],
+        [Note(*n) for n in data["machine"]],
+    )
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Record a duet session (human + machine streams).")
-    parser.add_argument("--human-port", default="IAC Driver Bus 1", help="port the human plays on")
-    parser.add_argument("--machine-port", default="osc-genai out", help="the model's output port")
-    parser.add_argument("--bpm", type=float, default=130.0)
-    parser.add_argument("--seconds", type=float, default=None, help="record length (else Ctrl-C)")
-    parser.add_argument("--out", default="session.json", help="output paired-session JSON")
-    args = parser.parse_args()
+    args = build_parser(REGISTRY["record"]).parse_args()
 
-    with mido.open_input(args.human_port) as human_in, mido.open_input(args.machine_port) as machine_in:
+    with (
+        mido.open_input(args.human_port) as human_in,
+        mido.open_input(args.machine_port) as machine_in,
+    ):
         print(
             f"recording: human={args.human_port!r}, machine={args.machine_port!r}. "
             + (f"{args.seconds}s." if args.seconds else "Ctrl-C to stop.")
         )
-        human, machine = record_session(human_in, machine_in, bpm=args.bpm, seconds=args.seconds)
+        human, machine = record_session(
+            human_in, machine_in, bpm=args.bpm, seconds=args.seconds
+        )
     save_session(human, machine, args.bpm, args.out)
     print(f"recorded {len(human)} human + {len(machine)} machine note(s) -> {args.out}")
 

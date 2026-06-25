@@ -9,14 +9,17 @@ responder (turn-taking / simultaneous, with scheduling) lands in M3 alongside th
 
 from __future__ import annotations
 
-import argparse
-
-from osc_genai.osc.ableton import AbletonOSC
+from osc_genai.cli_spec import REGISTRY, build_parser
+from osc_genai.core.event import (
+    DEFAULT_STEPS_PER_BEAT,
+    events_to_notes,
+    notes_to_events,
+)
 from osc_genai.core.note import Note, total_beats
-from osc_genai.model.factored import FactoredEventModel
-from osc_genai.core.event import DEFAULT_STEPS_PER_BEAT, events_to_notes, notes_to_events
-from osc_genai.model.checkpoint import load_model
 from osc_genai.core.vocab import EventCodec
+from osc_genai.model.checkpoint import load_model
+from osc_genai.model.factored import FactoredEventModel
+from osc_genai.osc.ableton import AbletonOSC
 
 
 def generate_phrase(
@@ -36,31 +39,24 @@ def generate_phrase(
         context_events = notes_to_events(context, steps_per_beat=steps_per_beat)
         context_fields = codec.encode_sequence(context_events, add_eos=False)
     generated = model.generate(
-        context=context_fields, max_events=max_events, temperature=temperature, pitch_bias=pitch_bias
+        context=context_fields,
+        max_events=max_events,
+        temperature=temperature,
+        pitch_bias=pitch_bias,
     )
     events = codec.decode_sequence(generated)
     return events_to_notes(events, steps_per_beat=steps_per_beat)
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Generate a phrase with a trained model into Live.")
-    parser.add_argument("--checkpoint", required=True, help="path to a saved model (.pt)")
-    parser.add_argument("--track", type=int, default=0, help="destination track for the response")
-    parser.add_argument("--slot", type=int, default=0, help="destination clip slot")
-    parser.add_argument(
-        "--context-track", type=int, default=None, help="track to read a call/context clip from"
-    )
-    parser.add_argument("--context-slot", type=int, default=0, help="slot of the context clip")
-    parser.add_argument("--temperature", type=float, default=1.0)
-    parser.add_argument("--max-events", type=int, default=64)
-    parser.add_argument("--steps-per-beat", type=int, default=DEFAULT_STEPS_PER_BEAT)
-    parser.add_argument("--device", default="auto", help="cpu | cuda | mps | auto")
-    args = parser.parse_args()
+    args = build_parser(REGISTRY["generate"]).parse_args()
 
     model = load_model(args.checkpoint, device=args.device)
     with AbletonOSC() as live:
         context = None
-        if args.context_track is not None and live.has_clip(args.context_track, args.context_slot):
+        if args.context_track is not None and live.has_clip(
+            args.context_track, args.context_slot
+        ):
             context = live.get_clip_notes(args.context_track, args.context_slot)
             print(f"primed on {len(context)} context note(s)")
         notes = generate_phrase(

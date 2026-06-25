@@ -20,7 +20,6 @@ stand-in; later milestones drop a trained model in its place without touching th
 
 from __future__ import annotations
 
-import argparse
 import os
 import statistics
 import time
@@ -31,11 +30,14 @@ from typing import Protocol, runtime_checkable
 os.environ.setdefault("MIDO_BACKEND", "mido.backends.rtmidi")
 import mido  # noqa: E402  (import must follow the backend selection above)
 
+from osc_genai.cli_spec import REGISTRY, build_parser  # noqa: E402
+
 DEFAULT_IN_PORT = "osc-genai in"
 DEFAULT_OUT_PORT = "osc-genai out"
 
 
 # -- events -----------------------------------------------------------------------------------
+
 
 @dataclass(frozen=True)
 class NoteEvent:
@@ -51,7 +53,7 @@ class NoteEvent:
     on: bool
 
     @classmethod
-    def from_message(cls, msg: "mido.Message") -> "NoteEvent | None":
+    def from_message(cls, msg: mido.Message) -> NoteEvent | None:
         """Convert a mido message to a NoteEvent, or ``None`` if it isn't a note.
 
         A ``note_on`` with velocity 0 is the conventional note-off and is normalised here.
@@ -62,7 +64,7 @@ class NoteEvent:
             return cls(pitch=msg.note, velocity=0, on=False)
         return None
 
-    def to_message(self, channel: int = 0) -> "mido.Message":
+    def to_message(self, channel: int = 0) -> mido.Message:
         """Convert back to a mido message (note-off is emitted as an explicit ``note_off``)."""
         if self.on:
             return mido.Message(
@@ -73,6 +75,7 @@ class NoteEvent:
 
 # -- responder seam ---------------------------------------------------------------------------
 
+
 @runtime_checkable
 class Responder(Protocol):
     """Turns an incoming human note event into zero or more machine note events.
@@ -82,8 +85,7 @@ class Responder(Protocol):
     future (see ``scheduler.py``, M3).
     """
 
-    def respond(self, event: NoteEvent) -> list[NoteEvent]:
-        ...
+    def respond(self, event: NoteEvent) -> list[NoteEvent]: ...
 
 
 @dataclass
@@ -108,6 +110,7 @@ class IntervalHarmonizer:
 
 
 # -- engine -----------------------------------------------------------------------------------
+
 
 @dataclass
 class DuetEngine:
@@ -138,9 +141,10 @@ class DuetEngine:
         With ``virtual=True`` we create our own ports for the musician to route Live to/from;
         otherwise we connect to existing ports by name.
         """
-        with mido.open_input(in_port, virtual=virtual) as inp, mido.open_output(
-            out_port, virtual=virtual
-        ) as out:
+        with (
+            mido.open_input(in_port, virtual=virtual) as inp,
+            mido.open_output(out_port, virtual=virtual) as out,
+        ):
             print(
                 f"Duet live: listening on {in_port!r}, responding on {out_port!r}. Ctrl-C to stop."
             )
@@ -176,7 +180,7 @@ class DuetEngine:
         )
 
 
-def _all_notes_off(out: "mido.ports.BaseOutput", channel: int) -> None:
+def _all_notes_off(out: mido.ports.BaseOutput, channel: int) -> None:
     """Panic: silence every pitch so nothing is left hanging when we stop."""
     for pitch in range(128):
         out.send(mido.Message("note_off", note=pitch, velocity=0, channel=channel))
@@ -184,36 +188,25 @@ def _all_notes_off(out: "mido.ports.BaseOutput", channel: int) -> None:
 
 # -- CLI ----------------------------------------------------------------------------------------
 
+
 def _parse_intervals(text: str) -> tuple[int, ...]:
     return tuple(int(part) for part in text.split(",") if part.strip())
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Real-time MIDI duet over virtual MIDI ports.")
-    parser.add_argument("--in-port", default=DEFAULT_IN_PORT, help="input port name")
-    parser.add_argument("--out-port", default=DEFAULT_OUT_PORT, help="output port name")
-    parser.add_argument(
-        "--intervals",
-        default="4,7",
-        help="comma-separated semitone intervals for the harmonizer stand-in (default 4,7)",
-    )
-    parser.add_argument(
-        "--no-virtual",
-        action="store_true",
-        help="connect to existing ports by name instead of creating virtual ports",
-    )
-    parser.add_argument(
-        "--list-ports", action="store_true", help="list available MIDI ports and exit"
-    )
-    args = parser.parse_args()
+    args = build_parser(REGISTRY["live"]).parse_args()
 
     if args.list_ports:
         print("Inputs: ", mido.get_input_names())
         print("Outputs:", mido.get_output_names())
         return
 
-    engine = DuetEngine(responder=IntervalHarmonizer(intervals=_parse_intervals(args.intervals)))
-    engine.run(in_port=args.in_port, out_port=args.out_port, virtual=not args.no_virtual)
+    engine = DuetEngine(
+        responder=IntervalHarmonizer(intervals=_parse_intervals(args.intervals))
+    )
+    engine.run(
+        in_port=args.in_port, out_port=args.out_port, virtual=not args.no_virtual
+    )
 
 
 if __name__ == "__main__":
